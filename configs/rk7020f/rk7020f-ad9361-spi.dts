@@ -1,0 +1,47 @@
+/*
+ * AD9361 as a universal spidev node on PS SPI0, chip-select 0.
+ *
+ * This project's PL (zynq_rk7020_ps_wrapper) has no axi_ad9361/DMA
+ * fabric cores - it's just a dds_tx_chain_wrapper with no AXI/register
+ * interface (see zynq-rk7020f-iqforge.dts in buildroot_custom). So this
+ * overlay does NOT bind the mainline adi,ad9361 IIO driver (that one
+ * needs cf_ad9361_adc/dac cores for DMA streaming, see the fmcomms2
+ * RK-ZYNQ7020-F-AD board's zynq-rk7020f-ad.dts for that setup).
+ *
+ * Instead it exposes AD9361 as a plain spidev character device
+ * (/dev/spidevX.0), so project::iq_forge (hal::spi_device +
+ * drivers::ad9361) can do register reads/writes from userspace.
+ *
+ * compatible = "rohm,dh2228fv": the kernel's spidev driver refuses to
+ * bind to a node whose compatible is the literal string "spidev" -
+ * that's a deliberate anti-abuse check (spi_match_device() in
+ * drivers/spi/spidev.c only matches entries in its own of_device_id
+ * table, which does NOT include "spidev" itself). "rohm,dh2228fv" is
+ * one of the placeholder compatibles that table does accept, and is
+ * the standard convention for a generic spidev passthrough node -
+ * confirmed on this exact board: compatible = "spidev" left spi0.0
+ * permanently unbound (no /dev/spidev*, driver_match_device() == false).
+ *
+ * spi-cpha matches the RK-ZYNQ7020-F-AD board's working ad9361-phy
+ * node - same carrier, same PS SPI0 EMIO -> AD9361 header wiring,
+ * different PL/DMA-only.
+ *
+ * Requires the target's base devicetree (zynq-rk7020f-iqforge.dtb) to
+ * carry &spi0 with status = "okay" - already the case, see
+ * buildroot_custom board/zynq/RK-ZYNQ7020-F-IQFORGE/dts.
+ */
+
+/dts-v1/;
+/plugin/;
+
+&spi0 {
+	#address-cells = <1>;
+	#size-cells = <0>;
+
+	ad9361: ad9361@0 {
+		compatible = "rohm,dh2228fv";
+		reg = <0>;
+		spi-cpha;
+		spi-max-frequency = <10000000>;
+	};
+};

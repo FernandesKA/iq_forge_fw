@@ -1,0 +1,3 @@
+[submodule "external/fpga_loader"]
+	path = external/fpga_loader
+	url = https://github.com/FernandesKA/fpga_loader.git
