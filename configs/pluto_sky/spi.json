@@ -1,0 +1,6 @@
+{
+    "device": "/dev/spidev0.0",
+    "mode": 1,
+    "bits_per_word": 8,
+    "speed_hz": 1000000
+}
