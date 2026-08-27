@@ -16,11 +16,13 @@
 
 #include "iq_forge.h"
 
+#include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <fstream>
 #include <map>
+#include <optional>
 #include <stdexcept>
 
 static void usage(const char *prog) {
@@ -85,20 +87,35 @@ static int cmd_start() {
     } catch (const std::exception &) {
     }
 
-    project::iq_forge forge(spi_cfg);
-
-    auto load_result = forge.load_fpga_bitstream(bitstream);
-    if (!load_result) {
-        std::fprintf(stderr, "error: %s\n", load_result.message.c_str());
-        return EXIT_FAILURE;
+    std::optional<std::uintptr_t> ad9361_ctrl_gpio_base;
+    if (auto it = manifest.find("AD9361_CTRL_GPIO_BASE"); it != manifest.end()) {
+        ad9361_ctrl_gpio_base = static_cast<std::uintptr_t>(std::strtoull(it->second.c_str(), nullptr, 0));
     }
-    std::printf("fpga loaded: state=%s\n", load_result.state.c_str());
 
-    if (!forge.apply_fpga_overlay(overlay_name, dtbo, true)) {
-        std::fprintf(stderr, "error: failed to apply overlay '%s'\n", overlay_name.c_str());
-        return EXIT_FAILURE;
+    project::iq_forge forge(spi_cfg, ad9361_ctrl_gpio_base);
+
+    if (forge.fpga_state() == "operating") {
+        std::printf("fpga already operating, skip reload\n");
+    } else {
+        auto load_result = forge.load_fpga_bitstream(bitstream);
+        if (!load_result) {
+            std::fprintf(stderr, "error: %s\n", load_result.message.c_str());
+            return EXIT_FAILURE;
+        }
+        std::printf("fpga loaded: state=%s\n", load_result.state.c_str());
     }
-    std::printf("overlay '%s' applied\n", overlay_name.c_str());
+
+    if (forge.overlay_status(overlay_name) == "applied") {
+        std::printf("overlay '%s' already applied, skip\n", overlay_name.c_str());
+    } else {
+        if (!forge.apply_fpga_overlay(overlay_name, dtbo, true)) {
+            std::fprintf(stderr, "error: failed to apply overlay '%s'\n", overlay_name.c_str());
+            return EXIT_FAILURE;
+        }
+        std::printf("overlay '%s' applied\n", overlay_name.c_str());
+    }
+
+    forge.bring_up_ad9361();
 
     try {
         std::printf("vendor-id: 0x%02x\n", forge.read_ad9361_vendor_id());

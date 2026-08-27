@@ -16,17 +16,28 @@ add_library(hal_spi
 )
 target_include_directories(hal_spi PUBLIC hal/spi/inc)
 
+add_library(hal_gpio
+    hal/gpio/src/mmio_register.cpp
+)
+target_include_directories(hal_gpio PUBLIC hal/gpio/inc)
+
 add_library(drivers_ad9361
     drivers/ad9361/src/ad9361.cpp
 )
 target_include_directories(drivers_ad9361 PUBLIC drivers/ad9361/inc)
 target_link_libraries(drivers_ad9361 PUBLIC hal_spi)
 
+add_library(drivers_ad9361_ctrl_gpio
+    drivers/ad9361_ctrl_gpio/src/ad9361_ctrl_gpio.cpp
+)
+target_include_directories(drivers_ad9361_ctrl_gpio PUBLIC drivers/ad9361_ctrl_gpio/inc)
+target_link_libraries(drivers_ad9361_ctrl_gpio PUBLIC hal_gpio)
+
 add_library(project_iq_forge
     project/src/iq_forge.cpp
 )
 target_include_directories(project_iq_forge PUBLIC project/inc)
-target_link_libraries(project_iq_forge PUBLIC drivers_ad9361 hal_spi fpga::loader)
+target_link_libraries(project_iq_forge PUBLIC drivers_ad9361 drivers_ad9361_ctrl_gpio hal_spi fpga::loader)
 
 add_executable(iq_forge_app project/src/main.cpp)
 target_link_libraries(iq_forge_app PRIVATE project_iq_forge)

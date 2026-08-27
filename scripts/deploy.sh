@@ -144,10 +144,18 @@ if [ -f "$CONFIG_DIR/spi.json" ]; then
     cp "$CONFIG_DIR/spi.json" "$STAGE_DIR/spi.json"
 fi
 
+GPIO_BASE_LINE=""
+if [ -f "$CONFIG_DIR/ad9361_ctrl_gpio_base" ]; then
+    GPIO_BASE="$(tr -d '[:space:]' < "$CONFIG_DIR/ad9361_ctrl_gpio_base")"
+    echo "Including AD9361 control GPIO base: $GPIO_BASE"
+    GPIO_BASE_LINE="AD9361_CTRL_GPIO_BASE=$GPIO_BASE"
+fi
+
 cat > "$STAGE_DIR/manifest.env" << EOF
 BITSTREAM=$BIN_NAME
 DTBO=$DTBO_NAME
 OVERLAY_NAME=$OVERLAY_NAME
+$GPIO_BASE_LINE
 EOF
 
 tar -czf "$ARCHIVE" -C "$STAGE_DIR" .
