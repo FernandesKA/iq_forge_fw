@@ -14,14 +14,14 @@
 namespace drivers {
 
 namespace {
-constexpr std::uint16_t SPI_READ_FLAG = 0x8000;
+constexpr std::uint16_t SPI_WRITE_FLAG = 0x8000;
 constexpr std::uint16_t SPI_ADDR_MASK = 0x03FF;
 } // namespace
 
 ad9361::ad9361(const hal::spi_device &spi) : m_spi(spi) {}
 
 std::uint8_t ad9361::read_register(std::uint16_t address) const {
-  std::uint16_t control = SPI_READ_FLAG | (address & SPI_ADDR_MASK);
+  std::uint16_t control = address & SPI_ADDR_MASK;
 
   std::uint8_t tx[3] = {static_cast<std::uint8_t>(control >> 8),
                         static_cast<std::uint8_t>(control & 0xFF), 0x00};
@@ -33,7 +33,7 @@ std::uint8_t ad9361::read_register(std::uint16_t address) const {
 }
 
 void ad9361::write_register(std::uint16_t address, std::uint8_t value) const {
-  std::uint16_t control = address & SPI_ADDR_MASK;
+  std::uint16_t control = SPI_WRITE_FLAG | (address & SPI_ADDR_MASK);
 
   std::uint8_t tx[3] = {static_cast<std::uint8_t>(control >> 8),
                         static_cast<std::uint8_t>(control & 0xFF), value};
