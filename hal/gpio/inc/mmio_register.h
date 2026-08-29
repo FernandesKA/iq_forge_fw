@@ -13,6 +13,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <string>
 
 namespace hal {
 
@@ -28,10 +29,17 @@ namespace hal {
             std::uint32_t read() const;
             void write(std::uint32_t value) const;
 
+            bool ok() const;
+            const std::string &last_error() const;
+
         private:
-            void *m_map_base;
-            std::size_t m_map_size;
-            volatile std::uint32_t *m_reg;
+            bool ensure_mapped() const;
+
+            std::uintptr_t m_physical_address;
+            mutable void *m_map_base;
+            mutable std::size_t m_map_size;
+            mutable volatile std::uint32_t *m_reg;
+            mutable std::string m_last_error;
     };
 
 }

@@ -23,7 +23,6 @@
 #include <fstream>
 #include <map>
 #include <optional>
-#include <stdexcept>
 
 static void usage(const char *prog) {
     std::fprintf(stderr,
@@ -36,10 +35,10 @@ static void usage(const char *prog) {
         prog, prog, prog, prog);
 }
 
-static std::map<std::string, std::string> read_manifest(const std::string &path) {
+static std::optional<std::map<std::string, std::string>> read_manifest(const std::string &path) {
     std::ifstream in(path);
     if (!in) {
-        throw std::runtime_error("cannot open " + path);
+        return std::nullopt;
     }
 
     std::map<std::string, std::string> result;
@@ -54,41 +53,33 @@ static std::map<std::string, std::string> read_manifest(const std::string &path)
     return result;
 }
 
-static const std::string &manifest_get(const std::map<std::string, std::string> &manifest, const char *key) {
+static const std::string *manifest_get(const std::map<std::string, std::string> &manifest, const char *key) {
     auto it = manifest.find(key);
     if (it == manifest.end()) {
-        throw std::runtime_error(std::string("manifest.env: missing ") + key);
+        return nullptr;
     }
-    return it->second;
+    return &it->second;
 }
 
 static int cmd_start() {
-    std::map<std::string, std::string> manifest;
-    try {
-        manifest = read_manifest("manifest.env");
-    } catch (const std::exception &e) {
-        std::fprintf(stderr, "error: %s\n", e.what());
+    auto manifest = read_manifest("manifest.env");
+    if (!manifest) {
+        std::fprintf(stderr, "error: cannot open manifest.env\n");
         return EXIT_FAILURE;
     }
 
-    std::string bitstream, dtbo, overlay_name;
-    try {
-        bitstream = manifest_get(manifest, "BITSTREAM");
-        dtbo = manifest_get(manifest, "DTBO");
-        overlay_name = manifest_get(manifest, "OVERLAY_NAME");
-    } catch (const std::exception &e) {
-        std::fprintf(stderr, "error: %s\n", e.what());
+    const std::string *bitstream = manifest_get(*manifest, "BITSTREAM");
+    const std::string *dtbo = manifest_get(*manifest, "DTBO");
+    const std::string *overlay_name = manifest_get(*manifest, "OVERLAY_NAME");
+    if (!bitstream || !dtbo || !overlay_name) {
+        std::fprintf(stderr, "error: manifest.env: missing BITSTREAM, DTBO, or OVERLAY_NAME\n");
         return EXIT_FAILURE;
     }
 
-    hal::spi_config spi_cfg;
-    try {
-        spi_cfg = hal::load_spi_config("spi.json");
-    } catch (const std::exception &) {
-    }
+    hal::spi_config spi_cfg = hal::load_spi_config("spi.json").value_or(hal::spi_config{});
 
     std::optional<std::uintptr_t> ad9361_ctrl_gpio_base;
-    if (auto it = manifest.find("AD9361_CTRL_GPIO_BASE"); it != manifest.end()) {
+    if (auto it = manifest->find("AD9361_CTRL_GPIO_BASE"); it != manifest->end()) {
         ad9361_ctrl_gpio_base = static_cast<std::uintptr_t>(std::strtoull(it->second.c_str(), nullptr, 0));
     }
 
@@ -97,7 +88,7 @@ static int cmd_start() {
     if (forge.fpga_state() == "operating") {
         std::printf("fpga already operating, skip reload\n");
     } else {
-        auto load_result = forge.load_fpga_bitstream(bitstream);
+        auto load_result = forge.load_fpga_bitstream(*bitstream);
         if (!load_result) {
             std::fprintf(stderr, "error: %s\n", load_result.message.c_str());
             return EXIT_FAILURE;
@@ -105,24 +96,33 @@ static int cmd_start() {
         std::printf("fpga loaded: state=%s\n", load_result.state.c_str());
     }
 
-    if (forge.overlay_status(overlay_name) == "applied") {
-        std::printf("overlay '%s' already applied, skip\n", overlay_name.c_str());
+    if (forge.overlay_status(*overlay_name) == "applied") {
+        std::printf("overlay '%s' already applied, skip\n", overlay_name->c_str());
     } else {
-        if (!forge.apply_fpga_overlay(overlay_name, dtbo, true)) {
-            std::fprintf(stderr, "error: failed to apply overlay '%s'\n", overlay_name.c_str());
+        if (!forge.apply_fpga_overlay(*overlay_name, *dtbo, true)) {
+            std::fprintf(stderr, "error: failed to apply overlay '%s'\n", overlay_name->c_str());
             return EXIT_FAILURE;
         }
-        std::printf("overlay '%s' applied\n", overlay_name.c_str());
+        std::printf("overlay '%s' applied\n", overlay_name->c_str());
     }
 
-    forge.bring_up_ad9361();
-
-    try {
-        std::printf("vendor-id: 0x%02x\n", forge.read_ad9361_vendor_id());
-    } catch (const std::exception &e) {
-        std::fprintf(stderr, "error: %s\n", e.what());
+    if (!forge.bring_up_ad9361()) {
+        std::fprintf(stderr, "error: %s\n", forge.ad9361_ctrl_gpio_error().c_str());
         return EXIT_FAILURE;
     }
+
+    auto vendor_id = forge.read_ad9361_vendor_id();
+    if (!vendor_id) {
+        std::fprintf(stderr, "error: %s\n", forge.ad9361_spi_error().c_str());
+        return EXIT_FAILURE;
+    }
+    std::printf("vendor-id: 0x%02x\n", *vendor_id);
+
+    if (!forge.init_ad9361_transceiver()) {
+        std::fprintf(stderr, "error: transceiver init failed (%d)\n", forge.ad9361_transceiver_error_code());
+        return EXIT_FAILURE;
+    }
+    std::printf("ad9361: transceiver initialized\n");
 
     return EXIT_SUCCESS;
 }
@@ -148,27 +148,24 @@ int main(int argc, char **argv) {
             }
         }
 
-        hal::spi_config cfg;
-        try {
-            cfg = hal::load_spi_config(config_path);
-        } catch (const std::exception &e) {
-            if (config_flag_given) {
-                std::fprintf(stderr, "error: %s\n", e.what());
-                return EXIT_FAILURE;
-            }
+        auto loaded_cfg = hal::load_spi_config(config_path);
+        if (!loaded_cfg && config_flag_given) {
+            std::fprintf(stderr, "error: cannot open or parse %s\n", config_path.c_str());
+            return EXIT_FAILURE;
         }
+        hal::spi_config cfg = loaded_cfg.value_or(hal::spi_config{});
 
         if (!spi_override.empty()) {
             cfg.device = spi_override;
         }
 
         project::iq_forge forge(cfg);
-        try {
-            std::printf("0x%02x\n", forge.read_ad9361_vendor_id());
-        } catch (const std::exception &e) {
-            std::fprintf(stderr, "error: %s\n", e.what());
+        auto vendor_id = forge.read_ad9361_vendor_id();
+        if (!vendor_id) {
+            std::fprintf(stderr, "error: %s\n", forge.ad9361_spi_error().c_str());
             return EXIT_FAILURE;
         }
+        std::printf("0x%02x\n", *vendor_id);
         return EXIT_SUCCESS;
     }
 

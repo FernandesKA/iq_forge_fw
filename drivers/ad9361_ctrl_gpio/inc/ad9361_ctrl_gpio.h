@@ -26,7 +26,9 @@ namespace drivers {
 
             // hold reset -> release resetb -> resetb=1,enable=0,txnrx=1
             // (FDD steady state, per regmap.md's bring-up sequence).
-            void bring_up() const;
+            bool bring_up() const;
+
+            const hal::mmio_register &ctrl_register() const { return m_reg; }
 
         private:
             hal::mmio_register m_reg;

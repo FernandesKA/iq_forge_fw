@@ -14,11 +14,21 @@
 namespace project {
 
     iq_forge::iq_forge(const hal::spi_config &ad9361_spi_config, std::optional<std::uintptr_t> ad9361_ctrl_gpio_base)
-        : m_ad9361_spi(ad9361_spi_config), m_ad9361(m_ad9361_spi), m_ad9361_ctrl_gpio_base(ad9361_ctrl_gpio_base) {
+        : m_ad9361_spi(ad9361_spi_config), m_ad9361(m_ad9361_spi),
+          m_ad9361_transceiver(ad9361_spi_config, ad9361_ctrl_gpio_base),
+          m_ad9361_ctrl_gpio_base(ad9361_ctrl_gpio_base) {
     }
 
-    std::uint8_t iq_forge::read_ad9361_vendor_id() const {
-        return m_ad9361.read_vendor_id();
+    std::optional<std::uint8_t> iq_forge::read_ad9361_vendor_id() const {
+        std::uint8_t id = m_ad9361.read_vendor_id();
+        if (!m_ad9361_spi.last_error().empty()) {
+            return std::nullopt;
+        }
+        return id;
+    }
+
+    const std::string &iq_forge::ad9361_spi_error() const {
+        return m_ad9361_spi.last_error();
     }
 
     fpga::LoadResult iq_forge::load_fpga_bitstream(const std::filesystem::path &bitstream, std::uint32_t flags) {
@@ -37,11 +47,32 @@ namespace project {
         return m_dt_overlay.status(name);
     }
 
-    void iq_forge::bring_up_ad9361() const {
+    bool iq_forge::bring_up_ad9361() const {
         if (!m_ad9361_ctrl_gpio_base) {
-            return;
+            m_ad9361_ctrl_gpio_last_error.clear();
+            return true;
         }
-        drivers::ad9361_ctrl_gpio(*m_ad9361_ctrl_gpio_base).bring_up();
+
+        drivers::ad9361_ctrl_gpio ctrl(*m_ad9361_ctrl_gpio_base);
+        bool ok = ctrl.bring_up();
+        m_ad9361_ctrl_gpio_last_error = ok ? std::string() : ctrl.ctrl_register().last_error();
+        return ok;
+    }
+
+    const std::string &iq_forge::ad9361_ctrl_gpio_error() const {
+        return m_ad9361_ctrl_gpio_last_error;
+    }
+
+    bool iq_forge::init_ad9361_transceiver() {
+        return m_ad9361_transceiver.init();
+    }
+
+    std::int32_t iq_forge::ad9361_transceiver_error_code() const {
+        return m_ad9361_transceiver.error_code();
+    }
+
+    bool iq_forge::ad9361_transceiver_ready() const {
+        return m_ad9361_transceiver.is_initialized();
     }
 
 }

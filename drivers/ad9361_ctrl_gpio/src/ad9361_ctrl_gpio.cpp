@@ -18,12 +18,16 @@ namespace drivers {
 
     ad9361_ctrl_gpio::ad9361_ctrl_gpio(std::uintptr_t mmio_base) : m_reg(mmio_base) {}
 
-    void ad9361_ctrl_gpio::bring_up() const {
+    bool ad9361_ctrl_gpio::bring_up() const {
         m_reg.write(kHoldReset);
+        if (!m_reg.ok()) {
+            return false;
+        }
         std::this_thread::sleep_for(std::chrono::milliseconds(1));
         m_reg.write(kReleaseReset);
         std::this_thread::sleep_for(std::chrono::milliseconds(1));
         m_reg.write(kSteadyState);
+        return true;
     }
 
 }

@@ -12,6 +12,7 @@
 #pragma once
 
 #include <cstdint>
+#include <optional>
 #include <string>
 
 namespace hal {
@@ -23,6 +24,6 @@ struct spi_config {
   std::uint32_t speed_hz = 1000000;
 };
 
-spi_config load_spi_config(const std::string &path);
+std::optional<spi_config> load_spi_config(const std::string &path);
 
 } // namespace hal

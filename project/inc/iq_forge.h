@@ -18,6 +18,7 @@
 
 #include "ad9361.h"
 #include "ad9361_ctrl_gpio.h"
+#include "ad9361_transceiver.h"
 #include "spi_device.h"
 
 #include "dt_overlay.hpp"
@@ -30,7 +31,8 @@ namespace project {
             explicit iq_forge(const hal::spi_config &ad9361_spi_config = {},
                                std::optional<std::uintptr_t> ad9361_ctrl_gpio_base = std::nullopt);
 
-            std::uint8_t read_ad9361_vendor_id() const;
+            std::optional<std::uint8_t> read_ad9361_vendor_id() const;
+            const std::string &ad9361_spi_error() const;
 
             fpga::LoadResult load_fpga_bitstream(const std::filesystem::path &bitstream, std::uint32_t flags = fpga::FpgaFlagNone);
 
@@ -48,11 +50,18 @@ namespace project {
             // ties those pins to fixed constants in the PL and has no such GPIO).
             // Must run before any AD9361 SPI access - the chip stays in reset
             // (and SPI reads back a floating bus) until this write happens.
-            void bring_up_ad9361() const;
+            bool bring_up_ad9361() const;
+            const std::string &ad9361_ctrl_gpio_error() const;
+
+            bool init_ad9361_transceiver();
+            std::int32_t ad9361_transceiver_error_code() const;
+
+            bool ad9361_transceiver_ready() const;
 
         private:
             hal::spi_device m_ad9361_spi;
             drivers::ad9361 m_ad9361;
+            drivers::ad9361_transceiver m_ad9361_transceiver;
             fpga::FpgaManager m_fpga_manager;
             fpga::DtOverlay m_dt_overlay;
 
@@ -61,6 +70,8 @@ namespace project {
             // isn't backed by anything until after the FPGA bitstream loads,
             // which happens after this class is constructed.
             std::optional<std::uintptr_t> m_ad9361_ctrl_gpio_base;
+
+            mutable std::string m_ad9361_ctrl_gpio_last_error;
     };
 
 }

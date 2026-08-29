@@ -16,16 +16,15 @@
 #include <cstdlib>
 #include <fstream>
 #include <sstream>
-#include <stdexcept>
 
 namespace hal {
 
     namespace {
 
-        std::string read_file(const std::string &path) {
+        std::optional<std::string> read_file(const std::string &path) {
             std::ifstream in(path, std::ios::binary);
             if (!in) {
-                throw std::runtime_error("spi_config: cannot open " + path);
+                return std::nullopt;
             }
             std::ostringstream ss;
             ss << in.rdbuf();
@@ -41,7 +40,7 @@ namespace hal {
 
             pos = json.find(':', pos + needle.size());
             if (pos == std::string::npos) {
-                throw std::runtime_error("spi_config: malformed entry for \"" + key + "\"");
+                return false;
             }
             ++pos;
 
@@ -52,7 +51,7 @@ namespace hal {
             if (pos < json.size() && json[pos] == '"') {
                 std::size_t end = json.find('"', pos + 1);
                 if (end == std::string::npos) {
-                    throw std::runtime_error("spi_config: unterminated string for \"" + key + "\"");
+                    return false;
                 }
                 out = json.substr(pos + 1, end - pos - 1);
                 return true;
@@ -68,24 +67,28 @@ namespace hal {
 
     }
 
-    spi_config load_spi_config(const std::string &path) {
-        std::string json = read_file(path);
+    std::optional<spi_config> load_spi_config(const std::string &path) {
+        std::optional<std::string> json = read_file(path);
+        if (!json) {
+            return std::nullopt;
+        }
+
         spi_config cfg;
 
         std::string value;
-        if (find_value(json, "device", value)) {
+        if (find_value(*json, "device", value)) {
             cfg.device = value;
         } else {
-            throw std::runtime_error("spi_config: \"device\" is required in " + path);
+            return std::nullopt;
         }
 
-        if (find_value(json, "mode", value)) {
+        if (find_value(*json, "mode", value)) {
             cfg.mode = static_cast<std::uint8_t>(std::strtoul(value.c_str(), nullptr, 0));
         }
-        if (find_value(json, "bits_per_word", value)) {
+        if (find_value(*json, "bits_per_word", value)) {
             cfg.bits_per_word = static_cast<std::uint8_t>(std::strtoul(value.c_str(), nullptr, 0));
         }
-        if (find_value(json, "speed_hz", value)) {
+        if (find_value(*json, "speed_hz", value)) {
             cfg.speed_hz = static_cast<std::uint32_t>(std::strtoul(value.c_str(), nullptr, 0));
         }
 

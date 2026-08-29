@@ -29,14 +29,18 @@ namespace hal {
 
             bool transfer(const std::uint8_t *tx, std::uint8_t *rx, std::size_t len) const;
 
+            bool ok() const;
+            const std::string &last_error() const;
+
         private:
-            void ensure_open() const;
+            bool ensure_open() const;
 
             std::string m_path;
             mutable int m_fd;
             std::uint8_t m_mode;
             std::uint8_t m_bits_per_word;
             std::uint32_t m_speed_hz;
+            mutable std::string m_last_error;
     };
 
 }

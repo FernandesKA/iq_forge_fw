@@ -12,7 +12,6 @@
 #include "spi_device.h"
 
 #include <cstring>
-#include <stdexcept>
 
 #include <fcntl.h>
 #include <linux/spi/spidev.h>
@@ -32,37 +31,47 @@ namespace hal {
         }
     }
 
-    void spi_device::ensure_open() const {
+    bool spi_device::ensure_open() const {
         if (m_fd >= 0) {
-            return;
+            return true;
         }
 
         m_fd = ::open(m_path.c_str(), O_RDWR);
         if (m_fd < 0) {
-            throw std::runtime_error("spi_device: failed to open " + m_path + ": " + std::strerror(errno));
+            m_last_error = "spi_device: failed to open " + m_path + ": " + std::strerror(errno);
+            return false;
         }
 
         if (::ioctl(m_fd, SPI_IOC_WR_MODE, &m_mode) < 0) {
+            m_last_error = "spi_device: failed to set mode on " + m_path + ": " + std::strerror(errno);
             ::close(m_fd);
             m_fd = -1;
-            throw std::runtime_error("spi_device: failed to set mode on " + m_path + ": " + std::strerror(errno));
+            return false;
         }
 
         if (::ioctl(m_fd, SPI_IOC_WR_BITS_PER_WORD, &m_bits_per_word) < 0) {
+            m_last_error = "spi_device: failed to set bits per word on " + m_path + ": " + std::strerror(errno);
             ::close(m_fd);
             m_fd = -1;
-            throw std::runtime_error("spi_device: failed to set bits per word on " + m_path + ": " + std::strerror(errno));
+            return false;
         }
 
         if (::ioctl(m_fd, SPI_IOC_WR_MAX_SPEED_HZ, &m_speed_hz) < 0) {
+            m_last_error = "spi_device: failed to set speed on " + m_path + ": " + std::strerror(errno);
             ::close(m_fd);
             m_fd = -1;
-            throw std::runtime_error("spi_device: failed to set speed on " + m_path + ": " + std::strerror(errno));
+            return false;
         }
+
+        m_last_error.clear();
+        return true;
     }
 
     bool spi_device::transfer(const std::uint8_t *tx, std::uint8_t *rx, std::size_t len) const {
-        ensure_open();
+        if (!ensure_open()) {
+            return false;
+        }
+        m_last_error.clear();
 
         struct spi_ioc_transfer tr;
         std::memset(&tr, 0, sizeof(tr));
@@ -73,7 +82,20 @@ namespace hal {
         tr.speed_hz = m_speed_hz;
         tr.bits_per_word = m_bits_per_word;
 
-        return ::ioctl(m_fd, SPI_IOC_MESSAGE(1), &tr) >= 0;
+        if (::ioctl(m_fd, SPI_IOC_MESSAGE(1), &tr) < 0) {
+            m_last_error = "spi_device: transfer failed on " + m_path + ": " + std::strerror(errno);
+            return false;
+        }
+
+        return true;
+    }
+
+    bool spi_device::ok() const {
+        return m_fd >= 0;
+    }
+
+    const std::string &spi_device::last_error() const {
+        return m_last_error;
     }
 
 }
