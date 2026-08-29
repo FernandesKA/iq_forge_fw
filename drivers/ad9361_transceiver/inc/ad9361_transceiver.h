@@ -20,6 +20,18 @@ struct ad9361_rf_phy;
 
 namespace drivers {
 
+    enum class rx_channel : std::uint8_t {
+        rx1 = 0,
+        rx2 = 1,
+    };
+
+    enum class rx_gain_mode : std::uint8_t {
+        manual = 0,
+        fast_attack_agc = 1,
+        slow_attack_agc = 2,
+        hybrid_agc = 3,
+    };
+
     class ad9361_transceiver {
         public:
             explicit ad9361_transceiver(const hal::spi_config &spi_config,
@@ -30,6 +42,11 @@ namespace drivers {
             ad9361_transceiver &operator=(const ad9361_transceiver &) = delete;
 
             bool init();
+
+            bool set_tx_lo_frequency(std::uint64_t hz);
+            bool set_rx_gain_control_mode(rx_channel ch, rx_gain_mode mode);
+            bool set_rx_gain_control_mode(rx_gain_mode mode);
+            bool enable_tx();
 
             bool is_initialized() const noexcept;
 

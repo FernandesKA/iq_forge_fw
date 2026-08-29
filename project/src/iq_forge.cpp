@@ -75,4 +75,16 @@ namespace project {
         return m_ad9361_transceiver.is_initialized();
     }
 
+    bool iq_forge::set_ad9361_tx_lo_frequency(std::uint64_t hz) {
+        return m_ad9361_transceiver.set_tx_lo_frequency(hz);
+    }
+
+    bool iq_forge::set_ad9361_rx_gain_control_mode(drivers::rx_gain_mode mode) {
+        return m_ad9361_transceiver.set_rx_gain_control_mode(mode);
+    }
+
+    bool iq_forge::enable_ad9361_tx() {
+        return m_ad9361_transceiver.enable_tx();
+    }
+
 }

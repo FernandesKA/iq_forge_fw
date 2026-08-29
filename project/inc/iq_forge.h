@@ -58,6 +58,10 @@ namespace project {
 
             bool ad9361_transceiver_ready() const;
 
+            bool set_ad9361_tx_lo_frequency(std::uint64_t hz);
+            bool set_ad9361_rx_gain_control_mode(drivers::rx_gain_mode mode);
+            bool enable_ad9361_tx();
+
         private:
             hal::spi_device m_ad9361_spi;
             drivers::ad9361 m_ad9361;

@@ -26,6 +26,12 @@ int32_t ad9361_transceiver_shim_init(void **out_phy,
 
 void ad9361_transceiver_shim_remove(void *phy);
 
+int32_t ad9361_transceiver_shim_set_tx_lo_freq(void *phy, uint64_t lo_freq_hz);
+
+int32_t ad9361_transceiver_shim_set_rx_gain_control_mode(void *phy, uint8_t ch, uint8_t gc_mode);
+
+int32_t ad9361_transceiver_shim_enable_tx(void *phy);
+
 #ifdef __cplusplus
 }
 #endif

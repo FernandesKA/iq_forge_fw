@@ -78,3 +78,18 @@ void ad9361_transceiver_shim_remove(void *phy)
 	if (phy)
 		ad9361_remove((struct ad9361_rf_phy *)phy);
 }
+
+int32_t ad9361_transceiver_shim_set_tx_lo_freq(void *phy, uint64_t lo_freq_hz)
+{
+	return ad9361_set_tx_lo_freq((struct ad9361_rf_phy *)phy, lo_freq_hz);
+}
+
+int32_t ad9361_transceiver_shim_set_rx_gain_control_mode(void *phy, uint8_t ch, uint8_t gc_mode)
+{
+	return ad9361_set_rx_gain_control_mode((struct ad9361_rf_phy *)phy, ch, gc_mode);
+}
+
+int32_t ad9361_transceiver_shim_enable_tx(void *phy)
+{
+	return ad9361_set_en_state_machine_mode((struct ad9361_rf_phy *)phy, ENSM_MODE_FDD);
+}

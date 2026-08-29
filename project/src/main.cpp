@@ -31,8 +31,26 @@ static void usage(const char *prog) {
         "         loads the bitstream, applies the overlay, reads vendor id.\n"
         "       %s vendor-id [--config <spi.json>] [--spi <path>]\n"
         "       %s load-fpga <bitstream.bin>\n"
-        "       %s apply-overlay <name> <overlay.dtbo> [--replace]\n",
-        prog, prog, prog, prog);
+        "       %s apply-overlay <name> <overlay.dtbo> [--replace]\n"
+        "       %s tx --freq <hz> [--agc manual|fast|slow|hybrid]\n"
+        "                [--config <spi.json>] [--ctrl-gpio-base <addr>]\n",
+        prog, prog, prog, prog, prog);
+}
+
+static std::optional<drivers::rx_gain_mode> parse_agc_mode(const std::string &name) {
+    if (name == "manual") {
+        return drivers::rx_gain_mode::manual;
+    }
+    if (name == "fast") {
+        return drivers::rx_gain_mode::fast_attack_agc;
+    }
+    if (name == "slow") {
+        return drivers::rx_gain_mode::slow_attack_agc;
+    }
+    if (name == "hybrid") {
+        return drivers::rx_gain_mode::hybrid_agc;
+    }
+    return std::nullopt;
 }
 
 static std::optional<std::map<std::string, std::string>> read_manifest(const std::string &path) {
@@ -166,6 +184,70 @@ int main(int argc, char **argv) {
             return EXIT_FAILURE;
         }
         std::printf("0x%02x\n", *vendor_id);
+        return EXIT_SUCCESS;
+    }
+
+    if (cmd == "tx") {
+        std::string config_path = "spi.json";
+        std::optional<std::uint64_t> freq_hz;
+        std::optional<drivers::rx_gain_mode> agc_mode;
+        std::optional<std::uintptr_t> ctrl_gpio_base;
+
+        for (int i = 2; i < argc; ++i) {
+            if (std::strcmp(argv[i], "--freq") == 0 && i + 1 < argc) {
+                freq_hz = std::strtoull(argv[++i], nullptr, 0);
+            } else if (std::strcmp(argv[i], "--agc") == 0 && i + 1 < argc) {
+                agc_mode = parse_agc_mode(argv[++i]);
+                if (!agc_mode) {
+                    std::fprintf(stderr, "error: unknown --agc value '%s'\n", argv[i]);
+                    return EXIT_FAILURE;
+                }
+            } else if (std::strcmp(argv[i], "--config") == 0 && i + 1 < argc) {
+                config_path = argv[++i];
+            } else if (std::strcmp(argv[i], "--ctrl-gpio-base") == 0 && i + 1 < argc) {
+                ctrl_gpio_base = static_cast<std::uintptr_t>(std::strtoull(argv[++i], nullptr, 0));
+            }
+        }
+
+        if (!freq_hz) {
+            usage(argv[0]);
+            return EXIT_FAILURE;
+        }
+
+        hal::spi_config cfg = hal::load_spi_config(config_path).value_or(hal::spi_config{});
+
+        project::iq_forge forge(cfg, ctrl_gpio_base);
+
+        if (!forge.bring_up_ad9361()) {
+            std::fprintf(stderr, "error: %s\n", forge.ad9361_ctrl_gpio_error().c_str());
+            return EXIT_FAILURE;
+        }
+
+        if (!forge.init_ad9361_transceiver()) {
+            std::fprintf(stderr, "error: transceiver init failed (%d)\n", forge.ad9361_transceiver_error_code());
+            return EXIT_FAILURE;
+        }
+
+        if (!forge.set_ad9361_tx_lo_frequency(*freq_hz)) {
+            std::fprintf(stderr, "error: set tx frequency failed (%d)\n", forge.ad9361_transceiver_error_code());
+            return EXIT_FAILURE;
+        }
+        std::printf("tx-lo: %llu Hz\n", static_cast<unsigned long long>(*freq_hz));
+
+        if (agc_mode) {
+            if (!forge.set_ad9361_rx_gain_control_mode(*agc_mode)) {
+                std::fprintf(stderr, "error: set agc mode failed (%d)\n", forge.ad9361_transceiver_error_code());
+                return EXIT_FAILURE;
+            }
+            std::printf("agc: enabled\n");
+        }
+
+        if (!forge.enable_ad9361_tx()) {
+            std::fprintf(stderr, "error: enable tx failed (%d)\n", forge.ad9361_transceiver_error_code());
+            return EXIT_FAILURE;
+        }
+        std::printf("tx: enabled\n");
+
         return EXIT_SUCCESS;
     }
 
