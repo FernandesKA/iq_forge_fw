@@ -151,11 +151,19 @@ if [ -f "$CONFIG_DIR/ad9361_ctrl_gpio_base" ]; then
     GPIO_BASE_LINE="AD9361_CTRL_GPIO_BASE=$GPIO_BASE"
 fi
 
+DDS_GPIO_BASE_LINE=""
+if [ -f "$CONFIG_DIR/dds_ctrl_gpio_base" ]; then
+    DDS_GPIO_BASE="$(tr -d '[:space:]' < "$CONFIG_DIR/dds_ctrl_gpio_base")"
+    echo "Including DDS control GPIO base: $DDS_GPIO_BASE"
+    DDS_GPIO_BASE_LINE="DDS_CTRL_GPIO_BASE=$DDS_GPIO_BASE"
+fi
+
 cat > "$STAGE_DIR/manifest.env" << EOF
 BITSTREAM=$BIN_NAME
 DTBO=$DTBO_NAME
 OVERLAY_NAME=$OVERLAY_NAME
 $GPIO_BASE_LINE
+$DDS_GPIO_BASE_LINE
 EOF
 
 tar -czf "$ARCHIVE" -C "$STAGE_DIR" .

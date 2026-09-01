@@ -19,6 +19,7 @@
 #include "ad9361.h"
 #include "ad9361_ctrl_gpio.h"
 #include "ad9361_transceiver.h"
+#include "dds_ctrl_gpio.h"
 #include "spi_device.h"
 
 #include "dt_overlay.hpp"
@@ -29,7 +30,8 @@ namespace project {
     class iq_forge {
         public:
             explicit iq_forge(const hal::spi_config &ad9361_spi_config = {},
-                               std::optional<std::uintptr_t> ad9361_ctrl_gpio_base = std::nullopt);
+                               std::optional<std::uintptr_t> ad9361_ctrl_gpio_base = std::nullopt,
+                               std::optional<std::uintptr_t> dds_ctrl_gpio_base = std::nullopt);
 
             std::optional<std::uint8_t> read_ad9361_vendor_id() const;
             const std::string &ad9361_spi_error() const;
@@ -62,6 +64,14 @@ namespace project {
             bool set_ad9361_rx_gain_control_mode(drivers::rx_gain_mode mode);
             bool enable_ad9361_tx();
 
+            // Enables/disables the DDS TX chain's sine output via
+            // axi_gpio_dds_ctrl (see
+            // https://github.com/FernandesKA/iq_forge_hdl/blob/main/docs/regmap.md).
+            // No-op (returns true) if constructed without dds_ctrl_gpio_base
+            // (e.g. rk7020f, which ties i_en to a fixed constant in the PL).
+            bool set_dds_enabled(bool enabled) const;
+            const std::string &dds_ctrl_gpio_error() const;
+
         private:
             hal::spi_device m_ad9361_spi;
             drivers::ad9361 m_ad9361;
@@ -74,8 +84,10 @@ namespace project {
             // isn't backed by anything until after the FPGA bitstream loads,
             // which happens after this class is constructed.
             std::optional<std::uintptr_t> m_ad9361_ctrl_gpio_base;
+            std::optional<std::uintptr_t> m_dds_ctrl_gpio_base;
 
             mutable std::string m_ad9361_ctrl_gpio_last_error;
+            mutable std::string m_dds_ctrl_gpio_last_error;
     };
 
 }

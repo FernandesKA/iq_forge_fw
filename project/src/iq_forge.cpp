@@ -13,10 +13,11 @@
 
 namespace project {
 
-    iq_forge::iq_forge(const hal::spi_config &ad9361_spi_config, std::optional<std::uintptr_t> ad9361_ctrl_gpio_base)
+    iq_forge::iq_forge(const hal::spi_config &ad9361_spi_config, std::optional<std::uintptr_t> ad9361_ctrl_gpio_base,
+                       std::optional<std::uintptr_t> dds_ctrl_gpio_base)
         : m_ad9361_spi(ad9361_spi_config), m_ad9361(m_ad9361_spi),
           m_ad9361_transceiver(ad9361_spi_config, ad9361_ctrl_gpio_base),
-          m_ad9361_ctrl_gpio_base(ad9361_ctrl_gpio_base) {
+          m_ad9361_ctrl_gpio_base(ad9361_ctrl_gpio_base), m_dds_ctrl_gpio_base(dds_ctrl_gpio_base) {
     }
 
     std::optional<std::uint8_t> iq_forge::read_ad9361_vendor_id() const {
@@ -85,6 +86,22 @@ namespace project {
 
     bool iq_forge::enable_ad9361_tx() {
         return m_ad9361_transceiver.enable_tx();
+    }
+
+    bool iq_forge::set_dds_enabled(bool enabled) const {
+        if (!m_dds_ctrl_gpio_base) {
+            m_dds_ctrl_gpio_last_error.clear();
+            return true;
+        }
+
+        drivers::dds_ctrl_gpio ctrl(*m_dds_ctrl_gpio_base);
+        bool ok = ctrl.set_enabled(enabled);
+        m_dds_ctrl_gpio_last_error = ok ? std::string() : ctrl.ctrl_register().last_error();
+        return ok;
+    }
+
+    const std::string &iq_forge::dds_ctrl_gpio_error() const {
+        return m_dds_ctrl_gpio_last_error;
     }
 
 }

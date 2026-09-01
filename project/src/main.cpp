@@ -21,8 +21,11 @@
 #include <cstdlib>
 #include <cstring>
 #include <fstream>
+#include <iostream>
 #include <map>
 #include <optional>
+#include <sstream>
+#include <string>
 
 static void usage(const char *prog) {
     std::fprintf(stderr,
@@ -33,8 +36,16 @@ static void usage(const char *prog) {
         "       %s load-fpga <bitstream.bin>\n"
         "       %s apply-overlay <name> <overlay.dtbo> [--replace]\n"
         "       %s tx --freq <hz> [--agc manual|fast|slow|hybrid]\n"
-        "                [--config <spi.json>] [--ctrl-gpio-base <addr>]\n",
-        prog, prog, prog, prog, prog);
+        "                [--config <spi.json>] [--ctrl-gpio-base <addr>]\n"
+        "       %s dds enable|disable --gpio-base <addr>\n"
+        "       %s console [--config <spi.json>] [--ctrl-gpio-base <addr>]\n"
+        "                [--dds-gpio-base <addr>]\n"
+        "         Interactive session - set frequency, init, and DDS on/off\n"
+        "         by typing commands instead of re-running the binary per\n"
+        "         value. Falls back to manifest.env in the current directory\n"
+        "         for the GPIO base addresses if the flags are omitted. Type\n"
+        "         'help' inside the session for the command list.\n",
+        prog, prog, prog, prog, prog, prog, prog);
 }
 
 static std::optional<drivers::rx_gain_mode> parse_agc_mode(const std::string &name) {
@@ -77,6 +88,230 @@ static const std::string *manifest_get(const std::map<std::string, std::string> 
         return nullptr;
     }
     return &it->second;
+}
+
+static std::optional<std::uint64_t> parse_u64(const std::string &s) {
+    if (s.empty()) {
+        return std::nullopt;
+    }
+    char *end = nullptr;
+    unsigned long long v = std::strtoull(s.c_str(), &end, 0);
+    if (end != s.c_str() + s.size()) {
+        return std::nullopt;
+    }
+    return static_cast<std::uint64_t>(v);
+}
+
+static void print_console_help() {
+    std::printf(
+        "Commands:\n"
+        "  init                          bring up AD9361 (reset + SPI) and init the transceiver\n"
+        "  freq <hz>                     set TX LO frequency, e.g. 'freq 915000000'\n"
+        "  agc manual|fast|slow|hybrid   set RX gain control mode\n"
+        "  tx on                         enable the AD9361 TX path\n"
+        "  dds on|off                    enable/disable the DDS sine output (axi_gpio_dds_ctrl)\n"
+        "  status                        show current session state\n"
+        "  help                          show this text\n"
+        "  quit | exit                   leave the console\n");
+}
+
+// Interactive REPL: keeps one project::iq_forge instance alive for the whole
+// session so 'init', 'freq', 'agc', 'tx on' and 'dds on|off' can be issued
+// one at a time instead of passing them all as argv on every invocation.
+static int cmd_console(int argc, char **argv) {
+    std::string config_path = "spi.json";
+    std::optional<std::uintptr_t> ctrl_gpio_base;
+    std::optional<std::uintptr_t> dds_gpio_base;
+
+    for (int i = 2; i < argc; ++i) {
+        if (std::strcmp(argv[i], "--config") == 0 && i + 1 < argc) {
+            config_path = argv[++i];
+        } else if (std::strcmp(argv[i], "--ctrl-gpio-base") == 0 && i + 1 < argc) {
+            ctrl_gpio_base = static_cast<std::uintptr_t>(std::strtoull(argv[++i], nullptr, 0));
+        } else if (std::strcmp(argv[i], "--dds-gpio-base") == 0 && i + 1 < argc) {
+            dds_gpio_base = static_cast<std::uintptr_t>(std::strtoull(argv[++i], nullptr, 0));
+        }
+    }
+
+    if (!ctrl_gpio_base || !dds_gpio_base) {
+        if (auto manifest = read_manifest("manifest.env")) {
+            if (!ctrl_gpio_base) {
+                if (auto it = manifest->find("AD9361_CTRL_GPIO_BASE"); it != manifest->end()) {
+                    ctrl_gpio_base = static_cast<std::uintptr_t>(std::strtoull(it->second.c_str(), nullptr, 0));
+                }
+            }
+            if (!dds_gpio_base) {
+                if (auto it = manifest->find("DDS_CTRL_GPIO_BASE"); it != manifest->end()) {
+                    dds_gpio_base = static_cast<std::uintptr_t>(std::strtoull(it->second.c_str(), nullptr, 0));
+                }
+            }
+        }
+    }
+
+    hal::spi_config cfg = hal::load_spi_config(config_path).value_or(hal::spi_config{});
+    project::iq_forge forge(cfg, ctrl_gpio_base, dds_gpio_base);
+
+    bool initialized = false;
+    std::optional<bool> dds_on;
+
+    std::printf("iq_forge interactive console. Type 'help' for commands, 'quit' to exit.\n");
+    if (!dds_gpio_base) {
+        std::printf("note: no DDS control GPIO base -- 'dds on|off' will error until one is set\n"
+                     "      (pass --dds-gpio-base or provide DDS_CTRL_GPIO_BASE in manifest.env)\n");
+    }
+
+    std::string line;
+    while (true) {
+        std::printf("> ");
+        std::fflush(stdout);
+        if (!std::getline(std::cin, line)) {
+            std::printf("\n");
+            break;
+        }
+
+        std::istringstream iss(line);
+        std::string tok;
+        if (!(iss >> tok)) {
+            continue;
+        }
+
+        if (tok == "quit" || tok == "exit") {
+            break;
+        }
+
+        if (tok == "help") {
+            print_console_help();
+            continue;
+        }
+
+        if (tok == "init") {
+            if (!forge.bring_up_ad9361()) {
+                std::printf("error: %s\n", forge.ad9361_ctrl_gpio_error().c_str());
+                continue;
+            }
+
+            auto vendor_id = forge.read_ad9361_vendor_id();
+            if (!vendor_id) {
+                std::printf("error: %s\n", forge.ad9361_spi_error().c_str());
+                continue;
+            }
+            std::printf("vendor-id: 0x%02x\n", *vendor_id);
+
+            if (!forge.init_ad9361_transceiver()) {
+                std::printf("error: transceiver init failed (%d)\n", forge.ad9361_transceiver_error_code());
+                continue;
+            }
+            initialized = true;
+            std::printf("ad9361: transceiver initialized\n");
+            continue;
+        }
+
+        if (tok == "freq") {
+            std::string hz_str;
+            if (!(iss >> hz_str)) {
+                std::printf("usage: freq <hz>\n");
+                continue;
+            }
+            auto hz = parse_u64(hz_str);
+            if (!hz) {
+                std::printf("error: invalid frequency '%s'\n", hz_str.c_str());
+                continue;
+            }
+            if (!initialized) {
+                std::printf("error: run 'init' first\n");
+                continue;
+            }
+            if (!forge.set_ad9361_tx_lo_frequency(*hz)) {
+                std::printf("error: set tx frequency failed (%d)\n", forge.ad9361_transceiver_error_code());
+                continue;
+            }
+            std::printf("tx-lo: %llu Hz\n", static_cast<unsigned long long>(*hz));
+            continue;
+        }
+
+        if (tok == "agc") {
+            std::string mode_str;
+            if (!(iss >> mode_str)) {
+                std::printf("usage: agc manual|fast|slow|hybrid\n");
+                continue;
+            }
+            auto mode = parse_agc_mode(mode_str);
+            if (!mode) {
+                std::printf("error: unknown agc mode '%s'\n", mode_str.c_str());
+                continue;
+            }
+            if (!initialized) {
+                std::printf("error: run 'init' first\n");
+                continue;
+            }
+            if (!forge.set_ad9361_rx_gain_control_mode(*mode)) {
+                std::printf("error: set agc mode failed (%d)\n", forge.ad9361_transceiver_error_code());
+                continue;
+            }
+            std::printf("agc: %s\n", mode_str.c_str());
+            continue;
+        }
+
+        if (tok == "tx") {
+            std::string sub;
+            iss >> sub;
+            if (sub != "on") {
+                std::printf("usage: tx on\n");
+                continue;
+            }
+            if (!initialized) {
+                std::printf("error: run 'init' first\n");
+                continue;
+            }
+            if (!forge.enable_ad9361_tx()) {
+                std::printf("error: enable tx failed (%d)\n", forge.ad9361_transceiver_error_code());
+                continue;
+            }
+            std::printf("tx: enabled\n");
+            continue;
+        }
+
+        if (tok == "dds") {
+            std::string sub;
+            iss >> sub;
+            bool enable;
+            if (sub == "on" || sub == "enable") {
+                enable = true;
+            } else if (sub == "off" || sub == "disable") {
+                enable = false;
+            } else {
+                std::printf("usage: dds on|off\n");
+                continue;
+            }
+            if (!dds_gpio_base) {
+                std::printf("error: no DDS control GPIO base (pass --dds-gpio-base or set DDS_CTRL_GPIO_BASE in manifest.env)\n");
+                continue;
+            }
+            if (!forge.set_dds_enabled(enable)) {
+                std::printf("error: %s\n", forge.dds_ctrl_gpio_error().c_str());
+                continue;
+            }
+            dds_on = enable;
+            std::printf("dds: %s\n", enable ? "enabled" : "disabled");
+            continue;
+        }
+
+        if (tok == "status") {
+            std::printf("ad9361: %s\n", initialized ? "initialized" : "not initialized");
+            std::printf("dds gpio base: ");
+            if (dds_gpio_base) {
+                std::printf("0x%llx\n", static_cast<unsigned long long>(*dds_gpio_base));
+            } else {
+                std::printf("not set\n");
+            }
+            std::printf("dds: %s\n", dds_on ? (*dds_on ? "enabled" : "disabled") : "unknown (not touched this session)");
+            continue;
+        }
+
+        std::printf("unknown command '%s' (type 'help')\n", tok.c_str());
+    }
+
+    return EXIT_SUCCESS;
 }
 
 static int cmd_start() {
@@ -249,6 +484,45 @@ int main(int argc, char **argv) {
         std::printf("tx: enabled\n");
 
         return EXIT_SUCCESS;
+    }
+
+    if (cmd == "dds") {
+        if (argc < 3) {
+            usage(argv[0]);
+            return EXIT_FAILURE;
+        }
+
+        const std::string action = argv[2];
+        if (action != "enable" && action != "disable") {
+            usage(argv[0]);
+            return EXIT_FAILURE;
+        }
+
+        std::optional<std::uintptr_t> gpio_base;
+        for (int i = 3; i < argc; ++i) {
+            if (std::strcmp(argv[i], "--gpio-base") == 0 && i + 1 < argc) {
+                gpio_base = static_cast<std::uintptr_t>(std::strtoull(argv[++i], nullptr, 0));
+            }
+        }
+
+        if (!gpio_base) {
+            usage(argv[0]);
+            return EXIT_FAILURE;
+        }
+
+        project::iq_forge forge({}, std::nullopt, gpio_base);
+        bool enabled = action == "enable";
+        if (!forge.set_dds_enabled(enabled)) {
+            std::fprintf(stderr, "error: %s\n", forge.dds_ctrl_gpio_error().c_str());
+            return EXIT_FAILURE;
+        }
+
+        std::printf("dds: %s\n", enabled ? "enabled" : "disabled");
+        return EXIT_SUCCESS;
+    }
+
+    if (cmd == "console") {
+        return cmd_console(argc, argv);
     }
 
     if (cmd == "load-fpga") {

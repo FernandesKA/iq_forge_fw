@@ -70,11 +70,17 @@ add_library(drivers_ad9361_ctrl_gpio
 target_include_directories(drivers_ad9361_ctrl_gpio PUBLIC drivers/ad9361_ctrl_gpio/inc)
 target_link_libraries(drivers_ad9361_ctrl_gpio PUBLIC hal_gpio)
 
+add_library(drivers_dds_ctrl_gpio
+    drivers/dds_ctrl_gpio/src/dds_ctrl_gpio.cpp
+)
+target_include_directories(drivers_dds_ctrl_gpio PUBLIC drivers/dds_ctrl_gpio/inc)
+target_link_libraries(drivers_dds_ctrl_gpio PUBLIC hal_gpio)
+
 add_library(project_iq_forge
     project/src/iq_forge.cpp
 )
 target_include_directories(project_iq_forge PUBLIC project/inc)
-target_link_libraries(project_iq_forge PUBLIC drivers_ad9361 drivers_ad9361_ctrl_gpio ad9361_transceiver hal_spi fpga::loader)
+target_link_libraries(project_iq_forge PUBLIC drivers_ad9361 drivers_ad9361_ctrl_gpio drivers_dds_ctrl_gpio ad9361_transceiver hal_spi fpga::loader)
 
 add_executable(iq_forge_app project/src/main.cpp)
 target_link_libraries(iq_forge_app PRIVATE project_iq_forge)
