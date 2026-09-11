@@ -80,12 +80,32 @@ namespace project {
         return m_ad9361_transceiver.set_tx_lo_frequency(hz);
     }
 
+    bool iq_forge::get_ad9361_tx_lo_frequency(std::uint64_t &hz) {
+        return m_ad9361_transceiver.get_tx_lo_frequency(hz);
+    }
+
+    bool iq_forge::set_ad9361_tx_attenuation(std::uint32_t attenuation_mdb) {
+        return m_ad9361_transceiver.set_tx_attenuation(attenuation_mdb);
+    }
+
+    bool iq_forge::get_ad9361_tx_attenuation(std::uint32_t &attenuation_mdb) {
+        return m_ad9361_transceiver.get_tx_attenuation(drivers::tx_channel::tx1, attenuation_mdb);
+    }
+
     bool iq_forge::set_ad9361_rx_gain_control_mode(drivers::rx_gain_mode mode) {
         return m_ad9361_transceiver.set_rx_gain_control_mode(mode);
     }
 
     bool iq_forge::enable_ad9361_tx() {
         return m_ad9361_transceiver.enable_tx();
+    }
+
+    bool iq_forge::disable_ad9361_tx() {
+        return m_ad9361_transceiver.disable_tx();
+    }
+
+    bool iq_forge::get_ad9361_ensm_state(drivers::ensm_state &state) {
+        return m_ad9361_transceiver.get_ensm_state(state);
     }
 
     bool iq_forge::set_dds_enabled(bool enabled) const {
@@ -98,6 +118,22 @@ namespace project {
         bool ok = ctrl.set_enabled(enabled);
         m_dds_ctrl_gpio_last_error = ok ? std::string() : ctrl.ctrl_register().last_error();
         return ok;
+    }
+
+    std::optional<bool> iq_forge::dds_enabled() const {
+        if (!m_dds_ctrl_gpio_base) {
+            m_dds_ctrl_gpio_last_error.clear();
+            return std::nullopt;
+        }
+
+        drivers::dds_ctrl_gpio ctrl(*m_dds_ctrl_gpio_base);
+        bool enabled = ctrl.is_enabled();
+        bool ok = ctrl.ctrl_register().ok();
+        m_dds_ctrl_gpio_last_error = ok ? std::string() : ctrl.ctrl_register().last_error();
+        if (!ok) {
+            return std::nullopt;
+        }
+        return enabled;
     }
 
     const std::string &iq_forge::dds_ctrl_gpio_error() const {

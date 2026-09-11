@@ -24,6 +24,7 @@ namespace drivers {
             explicit dds_ctrl_gpio(std::uintptr_t mmio_base);
 
             bool set_enabled(bool enabled) const;
+            bool is_enabled() const;
 
             const hal::mmio_register &ctrl_register() const { return m_reg; }
 

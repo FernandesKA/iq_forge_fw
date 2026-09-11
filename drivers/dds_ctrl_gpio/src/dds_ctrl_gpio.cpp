@@ -20,4 +20,8 @@ namespace drivers {
         return m_reg.ok();
     }
 
+    bool dds_ctrl_gpio::is_enabled() const {
+        return m_reg.read() != kDisabled;
+    }
+
 }

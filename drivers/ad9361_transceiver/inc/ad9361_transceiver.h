@@ -32,6 +32,26 @@ namespace drivers {
         hybrid_agc = 3,
     };
 
+    enum class tx_channel : std::uint8_t {
+        tx1 = 0,
+        tx2 = 1,
+    };
+
+    // Mirrors REG_ENSM_MODE (ad9361.h) - what the chip's state machine is
+    // actually doing right now, independent of what was last commanded.
+    enum class ensm_state : std::uint8_t {
+        sleep_wait = 0x0,
+        alert = 0x5,
+        tx = 0x6,
+        tx_flush = 0x7,
+        rx = 0x8,
+        rx_flush = 0x9,
+        fdd = 0xA,
+        fdd_flush = 0xB,
+        sleep = 0x80,
+        invalid = 0xFF,
+    };
+
     class ad9361_transceiver {
         public:
             explicit ad9361_transceiver(const hal::spi_config &spi_config,
@@ -44,9 +64,18 @@ namespace drivers {
             bool init();
 
             bool set_tx_lo_frequency(std::uint64_t hz);
+            bool get_tx_lo_frequency(std::uint64_t &hz);
+
+            bool set_tx_attenuation(tx_channel ch, std::uint32_t attenuation_mdb);
+            bool set_tx_attenuation(std::uint32_t attenuation_mdb);
+            bool get_tx_attenuation(tx_channel ch, std::uint32_t &attenuation_mdb);
+
             bool set_rx_gain_control_mode(rx_channel ch, rx_gain_mode mode);
             bool set_rx_gain_control_mode(rx_gain_mode mode);
+
             bool enable_tx();
+            bool disable_tx();
+            bool get_ensm_state(ensm_state &state);
 
             bool is_initialized() const noexcept;
 

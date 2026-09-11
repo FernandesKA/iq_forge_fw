@@ -35,7 +35,7 @@ static void usage(const char *prog) {
         "       %s vendor-id [--config <spi.json>] [--spi <path>]\n"
         "       %s load-fpga <bitstream.bin>\n"
         "       %s apply-overlay <name> <overlay.dtbo> [--replace]\n"
-        "       %s tx --freq <hz> [--agc manual|fast|slow|hybrid]\n"
+        "       %s tx --freq <hz> [--atten <db>] [--agc manual|fast|slow|hybrid]\n"
         "                [--config <spi.json>] [--ctrl-gpio-base <addr>]\n"
         "       %s dds enable|disable --gpio-base <addr>\n"
         "       %s console [--config <spi.json>] [--ctrl-gpio-base <addr>]\n"
@@ -46,6 +46,21 @@ static void usage(const char *prog) {
         "         for the GPIO base addresses if the flags are omitted. Type\n"
         "         'help' inside the session for the command list.\n",
         prog, prog, prog, prog, prog, prog, prog);
+}
+
+static const char *ensm_state_name(drivers::ensm_state state) {
+    switch (state) {
+        case drivers::ensm_state::sleep_wait: return "sleep_wait";
+        case drivers::ensm_state::alert: return "alert (tx/rx idle)";
+        case drivers::ensm_state::tx: return "tx";
+        case drivers::ensm_state::tx_flush: return "tx_flush";
+        case drivers::ensm_state::rx: return "rx";
+        case drivers::ensm_state::rx_flush: return "rx_flush";
+        case drivers::ensm_state::fdd: return "fdd (tx+rx active)";
+        case drivers::ensm_state::fdd_flush: return "fdd_flush";
+        case drivers::ensm_state::sleep: return "sleep";
+        default: return "invalid";
+    }
 }
 
 static std::optional<drivers::rx_gain_mode> parse_agc_mode(const std::string &name) {
@@ -106,11 +121,12 @@ static void print_console_help() {
     std::printf(
         "Commands:\n"
         "  init                          bring up AD9361 (reset + SPI) and init the transceiver\n"
-        "  freq <hz>                     set TX LO frequency, e.g. 'freq 915000000'\n"
+        "  freq [hz]                     set TX LO frequency (e.g. 'freq 915000000'), or read it back if no arg\n"
+        "  atten [db]                    set TX attenuation in dB (e.g. 'atten 10.25'), or read it back if no arg\n"
         "  agc manual|fast|slow|hybrid   set RX gain control mode\n"
-        "  tx on                         enable the AD9361 TX path\n"
-        "  dds on|off                    enable/disable the DDS sine output (axi_gpio_dds_ctrl)\n"
-        "  status                        show current session state\n"
+        "  tx on|off                     enable/disable the AD9361 TX path (ENSM), or show current state if no arg\n"
+        "  dds on|off                    enable/disable the DDS sine output (axi_gpio_dds_ctrl), or show current state if no arg\n"
+        "  status                        show current AD9361/DDS state, read live from the hardware\n"
         "  help                          show this text\n"
         "  quit | exit                   leave the console\n");
 }
@@ -208,8 +224,17 @@ static int cmd_console(int argc, char **argv) {
 
         if (tok == "freq") {
             std::string hz_str;
+            if (!initialized) {
+                std::printf("error: run 'init' first\n");
+                continue;
+            }
             if (!(iss >> hz_str)) {
-                std::printf("usage: freq <hz>\n");
+                std::uint64_t hz = 0;
+                if (!forge.get_ad9361_tx_lo_frequency(hz)) {
+                    std::printf("error: get tx frequency failed (%d)\n", forge.ad9361_transceiver_error_code());
+                    continue;
+                }
+                std::printf("tx-lo: %llu Hz\n", static_cast<unsigned long long>(hz));
                 continue;
             }
             auto hz = parse_u64(hz_str);
@@ -217,15 +242,41 @@ static int cmd_console(int argc, char **argv) {
                 std::printf("error: invalid frequency '%s'\n", hz_str.c_str());
                 continue;
             }
-            if (!initialized) {
-                std::printf("error: run 'init' first\n");
-                continue;
-            }
             if (!forge.set_ad9361_tx_lo_frequency(*hz)) {
                 std::printf("error: set tx frequency failed (%d)\n", forge.ad9361_transceiver_error_code());
                 continue;
             }
             std::printf("tx-lo: %llu Hz\n", static_cast<unsigned long long>(*hz));
+            continue;
+        }
+
+        if (tok == "atten") {
+            if (!initialized) {
+                std::printf("error: run 'init' first\n");
+                continue;
+            }
+            std::string db_str;
+            if (!(iss >> db_str)) {
+                std::uint32_t mdb = 0;
+                if (!forge.get_ad9361_tx_attenuation(mdb)) {
+                    std::printf("error: get tx attenuation failed (%d)\n", forge.ad9361_transceiver_error_code());
+                    continue;
+                }
+                std::printf("tx-atten: %.3f dB\n", mdb / 1000.0);
+                continue;
+            }
+            char *end = nullptr;
+            double db = std::strtod(db_str.c_str(), &end);
+            if (end != db_str.c_str() + db_str.size() || db < 0.0) {
+                std::printf("error: invalid attenuation '%s'\n", db_str.c_str());
+                continue;
+            }
+            std::uint32_t mdb = static_cast<std::uint32_t>(db * 1000.0 + 0.5);
+            if (!forge.set_ad9361_tx_attenuation(mdb)) {
+                std::printf("error: set tx attenuation failed (%d)\n", forge.ad9361_transceiver_error_code());
+                continue;
+            }
+            std::printf("tx-atten: %.3f dB\n", mdb / 1000.0);
             continue;
         }
 
@@ -253,27 +304,50 @@ static int cmd_console(int argc, char **argv) {
         }
 
         if (tok == "tx") {
-            std::string sub;
-            iss >> sub;
-            if (sub != "on") {
-                std::printf("usage: tx on\n");
-                continue;
-            }
             if (!initialized) {
                 std::printf("error: run 'init' first\n");
                 continue;
             }
-            if (!forge.enable_ad9361_tx()) {
-                std::printf("error: enable tx failed (%d)\n", forge.ad9361_transceiver_error_code());
+            std::string sub;
+            if (!(iss >> sub)) {
+                drivers::ensm_state state;
+                if (!forge.get_ad9361_ensm_state(state)) {
+                    std::printf("error: get ensm state failed (%d)\n", forge.ad9361_transceiver_error_code());
+                    continue;
+                }
+                std::printf("tx: %s\n", ensm_state_name(state));
                 continue;
             }
-            std::printf("tx: enabled\n");
+            if (sub != "on" && sub != "off") {
+                std::printf("usage: tx on|off\n");
+                continue;
+            }
+            bool enable = sub == "on";
+            bool ok = enable ? forge.enable_ad9361_tx() : forge.disable_ad9361_tx();
+            if (!ok) {
+                std::printf("error: %s tx failed (%d)\n", enable ? "enable" : "disable",
+                            forge.ad9361_transceiver_error_code());
+                continue;
+            }
+            std::printf("tx: %s\n", enable ? "enabled" : "disabled");
             continue;
         }
 
         if (tok == "dds") {
+            if (!dds_gpio_base) {
+                std::printf("error: no DDS control GPIO base (pass --dds-gpio-base or set DDS_CTRL_GPIO_BASE in manifest.env)\n");
+                continue;
+            }
             std::string sub;
-            iss >> sub;
+            if (!(iss >> sub)) {
+                auto enabled = forge.dds_enabled();
+                if (!enabled) {
+                    std::printf("error: %s\n", forge.dds_ctrl_gpio_error().c_str());
+                    continue;
+                }
+                std::printf("dds: %s\n", *enabled ? "enabled" : "disabled");
+                continue;
+            }
             bool enable;
             if (sub == "on" || sub == "enable") {
                 enable = true;
@@ -281,10 +355,6 @@ static int cmd_console(int argc, char **argv) {
                 enable = false;
             } else {
                 std::printf("usage: dds on|off\n");
-                continue;
-            }
-            if (!dds_gpio_base) {
-                std::printf("error: no DDS control GPIO base (pass --dds-gpio-base or set DDS_CTRL_GPIO_BASE in manifest.env)\n");
                 continue;
             }
             if (!forge.set_dds_enabled(enable)) {
@@ -298,13 +368,37 @@ static int cmd_console(int argc, char **argv) {
 
         if (tok == "status") {
             std::printf("ad9361: %s\n", initialized ? "initialized" : "not initialized");
+            if (initialized) {
+                std::uint64_t hz = 0;
+                if (forge.get_ad9361_tx_lo_frequency(hz)) {
+                    std::printf("tx-lo: %llu Hz\n", static_cast<unsigned long long>(hz));
+                } else {
+                    std::printf("tx-lo: error (%d)\n", forge.ad9361_transceiver_error_code());
+                }
+
+                std::uint32_t mdb = 0;
+                if (forge.get_ad9361_tx_attenuation(mdb)) {
+                    std::printf("tx-atten: %.3f dB\n", mdb / 1000.0);
+                } else {
+                    std::printf("tx-atten: error (%d)\n", forge.ad9361_transceiver_error_code());
+                }
+
+                drivers::ensm_state state;
+                if (forge.get_ad9361_ensm_state(state)) {
+                    std::printf("tx: %s\n", ensm_state_name(state));
+                } else {
+                    std::printf("tx: error (%d)\n", forge.ad9361_transceiver_error_code());
+                }
+            }
             std::printf("dds gpio base: ");
             if (dds_gpio_base) {
                 std::printf("0x%llx\n", static_cast<unsigned long long>(*dds_gpio_base));
+                auto enabled = forge.dds_enabled();
+                std::printf("dds: %s\n", enabled ? (*enabled ? "enabled" : "disabled") : "error");
             } else {
                 std::printf("not set\n");
+                std::printf("dds: %s\n", dds_on ? (*dds_on ? "enabled" : "disabled") : "unknown (not touched this session)");
             }
-            std::printf("dds: %s\n", dds_on ? (*dds_on ? "enabled" : "disabled") : "unknown (not touched this session)");
             continue;
         }
 
@@ -425,12 +519,15 @@ int main(int argc, char **argv) {
     if (cmd == "tx") {
         std::string config_path = "spi.json";
         std::optional<std::uint64_t> freq_hz;
+        std::optional<double> atten_db;
         std::optional<drivers::rx_gain_mode> agc_mode;
         std::optional<std::uintptr_t> ctrl_gpio_base;
 
         for (int i = 2; i < argc; ++i) {
             if (std::strcmp(argv[i], "--freq") == 0 && i + 1 < argc) {
                 freq_hz = std::strtoull(argv[++i], nullptr, 0);
+            } else if (std::strcmp(argv[i], "--atten") == 0 && i + 1 < argc) {
+                atten_db = std::strtod(argv[++i], nullptr);
             } else if (std::strcmp(argv[i], "--agc") == 0 && i + 1 < argc) {
                 agc_mode = parse_agc_mode(argv[++i]);
                 if (!agc_mode) {
@@ -468,6 +565,15 @@ int main(int argc, char **argv) {
             return EXIT_FAILURE;
         }
         std::printf("tx-lo: %llu Hz\n", static_cast<unsigned long long>(*freq_hz));
+
+        if (atten_db) {
+            std::uint32_t mdb = static_cast<std::uint32_t>(*atten_db * 1000.0 + 0.5);
+            if (!forge.set_ad9361_tx_attenuation(mdb)) {
+                std::fprintf(stderr, "error: set tx attenuation failed (%d)\n", forge.ad9361_transceiver_error_code());
+                return EXIT_FAILURE;
+            }
+            std::printf("tx-atten: %.3f dB\n", mdb / 1000.0);
+        }
 
         if (agc_mode) {
             if (!forge.set_ad9361_rx_gain_control_mode(*agc_mode)) {

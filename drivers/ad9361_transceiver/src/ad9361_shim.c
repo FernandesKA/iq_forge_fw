@@ -84,6 +84,21 @@ int32_t ad9361_transceiver_shim_set_tx_lo_freq(void *phy, uint64_t lo_freq_hz)
 	return ad9361_set_tx_lo_freq((struct ad9361_rf_phy *)phy, lo_freq_hz);
 }
 
+int32_t ad9361_transceiver_shim_get_tx_lo_freq(void *phy, uint64_t *lo_freq_hz)
+{
+	return ad9361_get_tx_lo_freq((struct ad9361_rf_phy *)phy, lo_freq_hz);
+}
+
+int32_t ad9361_transceiver_shim_set_tx_attenuation(void *phy, uint8_t ch, uint32_t attenuation_mdb)
+{
+	return ad9361_set_tx_attenuation((struct ad9361_rf_phy *)phy, ch, attenuation_mdb);
+}
+
+int32_t ad9361_transceiver_shim_get_tx_attenuation(void *phy, uint8_t ch, uint32_t *attenuation_mdb)
+{
+	return ad9361_get_tx_attenuation((struct ad9361_rf_phy *)phy, ch, attenuation_mdb);
+}
+
 int32_t ad9361_transceiver_shim_set_rx_gain_control_mode(void *phy, uint8_t ch, uint8_t gc_mode)
 {
 	return ad9361_set_rx_gain_control_mode((struct ad9361_rf_phy *)phy, ch, gc_mode);
@@ -92,4 +107,19 @@ int32_t ad9361_transceiver_shim_set_rx_gain_control_mode(void *phy, uint8_t ch, 
 int32_t ad9361_transceiver_shim_enable_tx(void *phy)
 {
 	return ad9361_set_en_state_machine_mode((struct ad9361_rf_phy *)phy, ENSM_MODE_FDD);
+}
+
+int32_t ad9361_transceiver_shim_disable_tx(void *phy)
+{
+	return ad9361_set_en_state_machine_mode((struct ad9361_rf_phy *)phy, ENSM_MODE_ALERT);
+}
+
+/* Declared in ad9361.h (not the public ad9361_api.h) - avoid pulling that
+ * lower-level header in just for one status readback. */
+extern uint8_t ad9361_ensm_get_state(struct ad9361_rf_phy *phy);
+
+int32_t ad9361_transceiver_shim_get_ensm_state(void *phy, uint8_t *state)
+{
+	*state = ad9361_ensm_get_state((struct ad9361_rf_phy *)phy);
+	return 0;
 }

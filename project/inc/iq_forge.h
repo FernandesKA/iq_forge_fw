@@ -61,8 +61,19 @@ namespace project {
             bool ad9361_transceiver_ready() const;
 
             bool set_ad9361_tx_lo_frequency(std::uint64_t hz);
+            bool get_ad9361_tx_lo_frequency(std::uint64_t &hz);
+
+            bool set_ad9361_tx_attenuation(std::uint32_t attenuation_mdb);
+            bool get_ad9361_tx_attenuation(std::uint32_t &attenuation_mdb);
+
             bool set_ad9361_rx_gain_control_mode(drivers::rx_gain_mode mode);
+
             bool enable_ad9361_tx();
+            bool disable_ad9361_tx();
+
+            // Live readback of the chip's ENSM state (what it's actually
+            // doing right now), not just what was last commanded.
+            bool get_ad9361_ensm_state(drivers::ensm_state &state);
 
             // Enables/disables the DDS TX chain's sine output via
             // axi_gpio_dds_ctrl (see
@@ -70,6 +81,11 @@ namespace project {
             // No-op (returns true) if constructed without dds_ctrl_gpio_base
             // (e.g. rk7020f, which ties i_en to a fixed constant in the PL).
             bool set_dds_enabled(bool enabled) const;
+
+            // Live readback of axi_gpio_dds_ctrl. nullopt if constructed
+            // without dds_ctrl_gpio_base or the register read failed (see
+            // dds_ctrl_gpio_error()).
+            std::optional<bool> dds_enabled() const;
             const std::string &dds_ctrl_gpio_error() const;
 
         private:

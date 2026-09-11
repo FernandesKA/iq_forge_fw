@@ -28,9 +28,19 @@ void ad9361_transceiver_shim_remove(void *phy);
 
 int32_t ad9361_transceiver_shim_set_tx_lo_freq(void *phy, uint64_t lo_freq_hz);
 
+int32_t ad9361_transceiver_shim_get_tx_lo_freq(void *phy, uint64_t *lo_freq_hz);
+
+int32_t ad9361_transceiver_shim_set_tx_attenuation(void *phy, uint8_t ch, uint32_t attenuation_mdb);
+
+int32_t ad9361_transceiver_shim_get_tx_attenuation(void *phy, uint8_t ch, uint32_t *attenuation_mdb);
+
 int32_t ad9361_transceiver_shim_set_rx_gain_control_mode(void *phy, uint8_t ch, uint8_t gc_mode);
 
 int32_t ad9361_transceiver_shim_enable_tx(void *phy);
+
+int32_t ad9361_transceiver_shim_disable_tx(void *phy);
+
+int32_t ad9361_transceiver_shim_get_ensm_state(void *phy, uint8_t *state);
 
 #ifdef __cplusplus
 }

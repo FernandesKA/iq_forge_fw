@@ -66,6 +66,52 @@ namespace drivers {
         return true;
     }
 
+    bool ad9361_transceiver::get_tx_lo_frequency(std::uint64_t &hz) {
+        if (!m_phy) {
+            return false;
+        }
+
+        std::int32_t ret = ad9361_transceiver_shim_get_tx_lo_freq(m_phy, &hz);
+        if (ret < 0) {
+            m_error_code = ret;
+            return false;
+        }
+        return true;
+    }
+
+    bool ad9361_transceiver::set_tx_attenuation(tx_channel ch, std::uint32_t attenuation_mdb) {
+        if (!m_phy) {
+            return false;
+        }
+
+        std::int32_t ret =
+            ad9361_transceiver_shim_set_tx_attenuation(m_phy, static_cast<std::uint8_t>(ch), attenuation_mdb);
+        if (ret < 0) {
+            m_error_code = ret;
+            return false;
+        }
+        return true;
+    }
+
+    bool ad9361_transceiver::set_tx_attenuation(std::uint32_t attenuation_mdb) {
+        return set_tx_attenuation(tx_channel::tx1, attenuation_mdb) &&
+               set_tx_attenuation(tx_channel::tx2, attenuation_mdb);
+    }
+
+    bool ad9361_transceiver::get_tx_attenuation(tx_channel ch, std::uint32_t &attenuation_mdb) {
+        if (!m_phy) {
+            return false;
+        }
+
+        std::int32_t ret =
+            ad9361_transceiver_shim_get_tx_attenuation(m_phy, static_cast<std::uint8_t>(ch), &attenuation_mdb);
+        if (ret < 0) {
+            m_error_code = ret;
+            return false;
+        }
+        return true;
+    }
+
     bool ad9361_transceiver::set_rx_gain_control_mode(rx_channel ch, rx_gain_mode mode) {
         if (!m_phy) {
             return false;
@@ -94,6 +140,34 @@ namespace drivers {
             m_error_code = ret;
             return false;
         }
+        return true;
+    }
+
+    bool ad9361_transceiver::disable_tx() {
+        if (!m_phy) {
+            return false;
+        }
+
+        std::int32_t ret = ad9361_transceiver_shim_disable_tx(m_phy);
+        if (ret < 0) {
+            m_error_code = ret;
+            return false;
+        }
+        return true;
+    }
+
+    bool ad9361_transceiver::get_ensm_state(ensm_state &state) {
+        if (!m_phy) {
+            return false;
+        }
+
+        std::uint8_t raw = 0;
+        std::int32_t ret = ad9361_transceiver_shim_get_ensm_state(m_phy, &raw);
+        if (ret < 0) {
+            m_error_code = ret;
+            return false;
+        }
+        state = static_cast<ensm_state>(raw);
         return true;
     }
 

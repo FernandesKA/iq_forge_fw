@@ -40,6 +40,7 @@
 
 	ad9361: ad9361@0 {
 		compatible = "rohm,dh2228fv";
+		status = "okay";
 		reg = <0>;
 		spi-cpha;
 		spi-max-frequency = <10000000>;
