@@ -34,8 +34,9 @@ static void usage(const char *prog) {
         "  Reads manifest.env + spi.json from the current directory, loads\n"
         "  the FPGA bitstream, applies the device-tree overlay, brings up\n"
         "  the AD9361, then opens an interactive numbered menu to read/set\n"
-        "  TX frequency and attenuation, RX AGC mode, TX enable/disable and\n"
-        "  DDS enable/disable, and read back live hardware state.\n",
+        "  TX frequency and attenuation, RX AGC mode, TX enable/disable,\n"
+        "  DDS enable/disable/frequency/reset, and read back live hardware\n"
+        "  state.\n",
         prog);
 }
 
@@ -190,15 +191,16 @@ static void print_menu() {
         " 7) TX state - read (ENSM)\n"
         " 8) DDS enable/disable\n"
         " 9) DDS state - read\n"
-        "10) DDS phase increment - set (not supported by current bitstream)\n"
-        "11) DDS reset (not supported by current bitstream)\n"
+        "10) DDS frequency - read (phase increment / FTW)\n"
+        "11) DDS frequency - set (phase increment / FTW)\n"
+        "12) DDS reset\n"
         " 0) exit\n");
 }
 
 static void run_menu(project::iq_forge &forge) {
     for (;;) {
         print_menu();
-        auto choice = read_choice("> ", 0, 11);
+        auto choice = read_choice("> ", 0, 12);
         if (!choice || *choice == 0) {
             return;
         }
@@ -303,16 +305,42 @@ static void run_menu(project::iq_forge &forge) {
                 }
                 break;
             }
-            case 10:
-                std::printf("not supported: axi_gpio_dds_ctrl has no phase-increment (FTW) register in the\n"
-                             "current bitstream - it's hardwired to a constant in the HDL. See\n"
-                             "iq_forge_hdl/docs/regmap.md.\n");
+            case 10: {
+                auto hz = forge.get_dds_frequency_hz();
+                if (hz) {
+                    std::printf("dds-freq: %.3f Hz\n", *hz);
+                } else {
+                    std::printf("error: %s\n", forge.dds_ftw_gpio_error().c_str());
+                }
                 break;
-            case 11:
-                std::printf("not supported: the DDS core has no reset input wired up in the current\n"
-                             "bitstream - disabling it only freezes the phase accumulator, it doesn't\n"
-                             "reset it. See iq_forge_hdl/docs/regmap.md.\n");
+            }
+            case 11: {
+                auto hz = read_double("Enter DDS frequency in Hz: ");
+                if (!hz || *hz < 0.0) {
+                    std::printf("invalid or cancelled\n");
+                    break;
+                }
+                if (forge.set_dds_frequency_hz(*hz)) {
+                    auto actual = forge.get_dds_frequency_hz();
+                    if (actual) {
+                        std::printf("dds-freq: %.3f Hz (requested %.3f Hz, rounded to nearest FTW step)\n", *actual,
+                                    *hz);
+                    } else {
+                        std::printf("dds-freq: set (requested %.3f Hz)\n", *hz);
+                    }
+                } else {
+                    std::printf("error: %s\n", forge.dds_ftw_gpio_error().c_str());
+                }
                 break;
+            }
+            case 12: {
+                if (forge.reset_dds()) {
+                    std::printf("dds: reset\n");
+                } else {
+                    std::printf("error: %s\n", forge.dds_ctrl_gpio_error().c_str());
+                }
+                break;
+            }
             default:
                 break;
         }
@@ -350,8 +378,16 @@ int main(int argc, char **argv) {
     if (auto it = manifest->find("DDS_CTRL_GPIO_BASE"); it != manifest->end()) {
         dds_ctrl_gpio_base = static_cast<std::uintptr_t>(std::strtoull(it->second.c_str(), nullptr, 0));
     }
+    std::optional<std::uintptr_t> dds_ftw_gpio_base;
+    if (auto it = manifest->find("DDS_FTW_GPIO_BASE"); it != manifest->end()) {
+        dds_ftw_gpio_base = static_cast<std::uintptr_t>(std::strtoull(it->second.c_str(), nullptr, 0));
+    }
+    std::optional<double> dds_clk_hz;
+    if (auto it = manifest->find("DDS_CLK_HZ"); it != manifest->end()) {
+        dds_clk_hz = std::strtod(it->second.c_str(), nullptr);
+    }
 
-    project::iq_forge forge(spi_cfg, ad9361_ctrl_gpio_base, dds_ctrl_gpio_base);
+    project::iq_forge forge(spi_cfg, ad9361_ctrl_gpio_base, dds_ctrl_gpio_base, dds_ftw_gpio_base, dds_clk_hz);
 
     if (forge.fpga_state() == "operating") {
         std::printf("fpga already operating, skip reload\n");

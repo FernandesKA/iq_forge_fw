@@ -158,12 +158,28 @@ if [ -f "$CONFIG_DIR/dds_ctrl_gpio_base" ]; then
     DDS_GPIO_BASE_LINE="DDS_CTRL_GPIO_BASE=$DDS_GPIO_BASE"
 fi
 
+DDS_FTW_GPIO_BASE_LINE=""
+if [ -f "$CONFIG_DIR/dds_ftw_gpio_base" ]; then
+    DDS_FTW_GPIO_BASE="$(tr -d '[:space:]' < "$CONFIG_DIR/dds_ftw_gpio_base")"
+    echo "Including DDS FTW GPIO base: $DDS_FTW_GPIO_BASE"
+    DDS_FTW_GPIO_BASE_LINE="DDS_FTW_GPIO_BASE=$DDS_FTW_GPIO_BASE"
+fi
+
+DDS_CLK_HZ_LINE=""
+if [ -f "$CONFIG_DIR/dds_clk_hz" ]; then
+    DDS_CLK_HZ="$(tr -d '[:space:]' < "$CONFIG_DIR/dds_clk_hz")"
+    echo "Including DDS clock rate: $DDS_CLK_HZ Hz"
+    DDS_CLK_HZ_LINE="DDS_CLK_HZ=$DDS_CLK_HZ"
+fi
+
 cat > "$STAGE_DIR/manifest.env" << EOF
 BITSTREAM=$BIN_NAME
 DTBO=$DTBO_NAME
 OVERLAY_NAME=$OVERLAY_NAME
 $GPIO_BASE_LINE
 $DDS_GPIO_BASE_LINE
+$DDS_FTW_GPIO_BASE_LINE
+$DDS_CLK_HZ_LINE
 EOF
 
 tar -czf "$ARCHIVE" -C "$STAGE_DIR" .

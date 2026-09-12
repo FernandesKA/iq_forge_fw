@@ -20,6 +20,7 @@
 #include "ad9361_ctrl_gpio.h"
 #include "ad9361_transceiver.h"
 #include "dds_ctrl_gpio.h"
+#include "dds_ftw_gpio.h"
 #include "spi_device.h"
 
 #include "dt_overlay.hpp"
@@ -31,7 +32,9 @@ namespace project {
         public:
             explicit iq_forge(const hal::spi_config &ad9361_spi_config = {},
                                std::optional<std::uintptr_t> ad9361_ctrl_gpio_base = std::nullopt,
-                               std::optional<std::uintptr_t> dds_ctrl_gpio_base = std::nullopt);
+                               std::optional<std::uintptr_t> dds_ctrl_gpio_base = std::nullopt,
+                               std::optional<std::uintptr_t> dds_ftw_gpio_base = std::nullopt,
+                               std::optional<double> dds_clk_hz = std::nullopt);
 
             std::optional<std::uint8_t> read_ad9361_vendor_id() const;
             const std::string &ad9361_spi_error() const;
@@ -86,7 +89,27 @@ namespace project {
             // without dds_ctrl_gpio_base or the register read failed (see
             // dds_ctrl_gpio_error()).
             std::optional<bool> dds_enabled() const;
+
+            // Pulses dds_rst via axi_gpio_dds_ctrl (see dds_ctrl_gpio::reset()).
+            // No-op (returns true) if constructed without dds_ctrl_gpio_base.
+            bool reset_dds() const;
+
             const std::string &dds_ctrl_gpio_error() const;
+
+            // Raw FTW register access via axi_gpio_dds_ftw. No-op (returns
+            // true) / nullopt if constructed without dds_ftw_gpio_base.
+            bool set_dds_ftw(std::uint32_t ftw) const;
+            std::optional<std::uint32_t> get_dds_ftw() const;
+
+            // Hz convenience on top of the FTW register: f_out = ftw *
+            // dds_clk_hz / 2^24. Requires both dds_ftw_gpio_base and
+            // dds_clk_hz to have been supplied at construction (the clock
+            // is board-specific - 50 MHz on pluto_sky, 40 MHz on rk7020f -
+            // so there's no safe default to fall back to).
+            bool set_dds_frequency_hz(double hz) const;
+            std::optional<double> get_dds_frequency_hz() const;
+
+            const std::string &dds_ftw_gpio_error() const;
 
         private:
             hal::spi_device m_ad9361_spi;
@@ -101,9 +124,12 @@ namespace project {
             // which happens after this class is constructed.
             std::optional<std::uintptr_t> m_ad9361_ctrl_gpio_base;
             std::optional<std::uintptr_t> m_dds_ctrl_gpio_base;
+            std::optional<std::uintptr_t> m_dds_ftw_gpio_base;
+            std::optional<double> m_dds_clk_hz;
 
             mutable std::string m_ad9361_ctrl_gpio_last_error;
             mutable std::string m_dds_ctrl_gpio_last_error;
+            mutable std::string m_dds_ftw_gpio_last_error;
     };
 
 }

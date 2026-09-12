@@ -14,10 +14,12 @@
 namespace project {
 
     iq_forge::iq_forge(const hal::spi_config &ad9361_spi_config, std::optional<std::uintptr_t> ad9361_ctrl_gpio_base,
-                       std::optional<std::uintptr_t> dds_ctrl_gpio_base)
+                       std::optional<std::uintptr_t> dds_ctrl_gpio_base,
+                       std::optional<std::uintptr_t> dds_ftw_gpio_base, std::optional<double> dds_clk_hz)
         : m_ad9361_spi(ad9361_spi_config), m_ad9361(m_ad9361_spi),
           m_ad9361_transceiver(ad9361_spi_config, ad9361_ctrl_gpio_base),
-          m_ad9361_ctrl_gpio_base(ad9361_ctrl_gpio_base), m_dds_ctrl_gpio_base(dds_ctrl_gpio_base) {
+          m_ad9361_ctrl_gpio_base(ad9361_ctrl_gpio_base), m_dds_ctrl_gpio_base(dds_ctrl_gpio_base),
+          m_dds_ftw_gpio_base(dds_ftw_gpio_base), m_dds_clk_hz(dds_clk_hz) {
     }
 
     std::optional<std::uint8_t> iq_forge::read_ad9361_vendor_id() const {
@@ -136,8 +138,82 @@ namespace project {
         return enabled;
     }
 
+    bool iq_forge::reset_dds() const {
+        if (!m_dds_ctrl_gpio_base) {
+            m_dds_ctrl_gpio_last_error.clear();
+            return true;
+        }
+
+        drivers::dds_ctrl_gpio ctrl(*m_dds_ctrl_gpio_base);
+        bool ok = ctrl.reset();
+        m_dds_ctrl_gpio_last_error = ok ? std::string() : ctrl.ctrl_register().last_error();
+        return ok;
+    }
+
     const std::string &iq_forge::dds_ctrl_gpio_error() const {
         return m_dds_ctrl_gpio_last_error;
+    }
+
+    bool iq_forge::set_dds_ftw(std::uint32_t ftw) const {
+        if (!m_dds_ftw_gpio_base) {
+            m_dds_ftw_gpio_last_error = "no DDS FTW GPIO base (DDS_FTW_GPIO_BASE not set)";
+            return false;
+        }
+
+        drivers::dds_ftw_gpio ctrl(*m_dds_ftw_gpio_base);
+        bool ok = ctrl.set_ftw(ftw);
+        m_dds_ftw_gpio_last_error = ok ? std::string() : ctrl.ctrl_register().last_error();
+        return ok;
+    }
+
+    std::optional<std::uint32_t> iq_forge::get_dds_ftw() const {
+        if (!m_dds_ftw_gpio_base) {
+            m_dds_ftw_gpio_last_error = "no DDS FTW GPIO base (DDS_FTW_GPIO_BASE not set)";
+            return std::nullopt;
+        }
+
+        drivers::dds_ftw_gpio ctrl(*m_dds_ftw_gpio_base);
+        std::uint32_t ftw = 0;
+        bool ok = ctrl.get_ftw(ftw);
+        m_dds_ftw_gpio_last_error = ok ? std::string() : ctrl.ctrl_register().last_error();
+        if (!ok) {
+            return std::nullopt;
+        }
+        return ftw;
+    }
+
+    bool iq_forge::set_dds_frequency_hz(double hz) const {
+        if (!m_dds_clk_hz) {
+            m_dds_ftw_gpio_last_error = "no DDS clock rate (DDS_CLK_HZ not set) - can't convert Hz to FTW";
+            return false;
+        }
+        if (hz < 0.0) {
+            m_dds_ftw_gpio_last_error = "frequency must not be negative";
+            return false;
+        }
+
+        constexpr double kAccScale = 16777216.0; // 2^24
+        std::uint32_t ftw = static_cast<std::uint32_t>(hz * kAccScale / *m_dds_clk_hz + 0.5);
+        return set_dds_ftw(ftw);
+    }
+
+    std::optional<double> iq_forge::get_dds_frequency_hz() const {
+        if (!m_dds_clk_hz) {
+            m_dds_ftw_gpio_last_error = "no DDS clock rate (DDS_CLK_HZ not set) - can't convert FTW to Hz";
+            return std::nullopt;
+        }
+
+        auto ftw = get_dds_ftw();
+        if (!ftw) {
+            return std::nullopt;
+        }
+
+        constexpr double kAccScale = 16777216.0; // 2^24
+        return *ftw * *m_dds_clk_hz / kAccScale;
+    }
+
+    const std::string &iq_forge::dds_ftw_gpio_error() const {
+        return m_dds_ftw_gpio_last_error;
     }
 
 }

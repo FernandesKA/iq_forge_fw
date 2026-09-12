@@ -72,6 +72,7 @@ target_link_libraries(drivers_ad9361_ctrl_gpio PUBLIC hal_gpio)
 
 add_library(drivers_dds_ctrl_gpio
     drivers/dds_ctrl_gpio/src/dds_ctrl_gpio.cpp
+    drivers/dds_ctrl_gpio/src/dds_ftw_gpio.cpp
 )
 target_include_directories(drivers_dds_ctrl_gpio PUBLIC drivers/dds_ctrl_gpio/inc)
 target_link_libraries(drivers_dds_ctrl_gpio PUBLIC hal_gpio)

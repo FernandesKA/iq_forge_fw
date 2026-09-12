@@ -16,12 +16,31 @@ namespace drivers {
     dds_ctrl_gpio::dds_ctrl_gpio(std::uintptr_t mmio_base) : m_reg(mmio_base) {}
 
     bool dds_ctrl_gpio::set_enabled(bool enabled) const {
-        m_reg.write(enabled ? kEnabled : kDisabled);
+        std::uint32_t v = m_reg.read();
+        if (!m_reg.ok()) {
+            return false;
+        }
+        v = enabled ? (v | kEnBit) : (v & ~kEnBit);
+        m_reg.write(v);
         return m_reg.ok();
     }
 
     bool dds_ctrl_gpio::is_enabled() const {
-        return m_reg.read() != kDisabled;
+        std::uint32_t v = m_reg.read();
+        return (v & kEnBit) != 0;
+    }
+
+    bool dds_ctrl_gpio::reset() const {
+        std::uint32_t v = m_reg.read();
+        if (!m_reg.ok()) {
+            return false;
+        }
+        m_reg.write(v | kRstBit);
+        if (!m_reg.ok()) {
+            return false;
+        }
+        m_reg.write(v & ~kRstBit);
+        return m_reg.ok();
     }
 
 }
