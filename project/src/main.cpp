@@ -1,16 +1,16 @@
 /**
  * @file main.cpp
  * @author FernandesKA (fernandes.kir@yandex.ru)
- * @brief CLI entry point for project::iq_forge: AD9361 vendor id readback,
- *        FPGA bitstream load, device-tree overlay apply. Meant to be
- *        deployed to the target board (see scripts/deploy.sh, scripts/load.sh).
- *        Run with no arguments to do the whole thing using manifest.env +
- *        spi.json from the current directory - that's what a deployed
- *        archive extracts to, so no flags are needed on target.
- *        Run with any argument (e.g. "menu") to open an interactive,
- *        number-selected menu for manual use instead.
- * @version 0.1
- * @date 2026-08-20
+ * @brief Entry point for project::iq_forge. Reads manifest.env + spi.json
+ *        from the current directory, loads the FPGA bitstream, applies the
+ *        device-tree overlay, brings up the AD9361, then opens an
+ *        interactive numbered menu to control TX frequency/attenuation/AGC,
+ *        TX and DDS enable, and read back live hardware state. Meant to be
+ *        deployed to the target board (see scripts/deploy.sh,
+ *        scripts/load.sh) - a plain `./iq_forge_app` with no arguments does
+ *        the whole thing, no flags needed on target.
+ * @version 0.2
+ * @date 2026-09-12
  *
  * @copyright Copyright (c) 2026
  *
@@ -21,22 +21,22 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <fstream>
 #include <iostream>
 #include <map>
 #include <optional>
-#include <sstream>
 #include <string>
 
 static void usage(const char *prog) {
     std::fprintf(stderr,
-        "Usage: %s        Reads manifest.env + spi.json from the current directory,\n"
-        "                loads the bitstream, applies the overlay, reads vendor id.\n"
-        "                This is what a deployed archive runs unattended.\n"
-        "       %s menu   Opens an interactive, number-selected menu for manual use\n"
-        "                (vendor id, tx settings, dds on/off, fpga load, overlay apply).\n"
-        "                Also reads manifest.env + spi.json from the current directory.\n",
-        prog, prog);
+        "Usage: %s [--help]\n"
+        "  Reads manifest.env + spi.json from the current directory, loads\n"
+        "  the FPGA bitstream, applies the device-tree overlay, brings up\n"
+        "  the AD9361, then opens an interactive numbered menu to read/set\n"
+        "  TX frequency and attenuation, RX AGC mode, TX enable/disable and\n"
+        "  DDS enable/disable, and read back live hardware state.\n",
+        prog);
 }
 
 static const char *ensm_state_name(drivers::ensm_state state) {
@@ -92,354 +92,240 @@ static std::optional<std::uint64_t> parse_u64(const std::string &s) {
     return static_cast<std::uint64_t>(v);
 }
 
-// Prints a prompt, reads one line from stdin. Empty string on EOF.
-static std::string prompt_line(const char *message) {
-    std::printf("%s", message);
-    std::fflush(stdout);
+// Reads one line from stdin. nullopt means EOF (e.g. ssh running this
+// non-interactively, or the user hit ctrl-D) - callers treat that as "leave".
+static std::optional<std::string> read_line(const char *prompt) {
+    if (prompt) {
+        std::fputs(prompt, stdout);
+        std::fflush(stdout);
+    }
     std::string line;
     if (!std::getline(std::cin, line)) {
-        return {};
+        return std::nullopt;
     }
     return line;
 }
 
-static void print_menu_help() {
-    std::printf(
-        " 1) status         show current AD9361/DDS state, read live from the hardware\n"
-        " 2) init           bring up AD9361 (reset + SPI) and init the transceiver\n"
-        " 3) vendor-id      read the AD9361 vendor id over SPI\n"
-        " 4) tx frequency   set TX LO frequency in Hz, or read it back\n"
-        " 5) tx attenuation set TX attenuation in dB, or read it back\n"
-        " 6) agc mode       set RX gain control mode\n"
-        " 7) tx on/off      enable/disable the AD9361 TX path (ENSM), or read it back\n"
-        " 8) dds on/off     enable/disable the DDS sine output, or read it back\n"
-        " 9) load fpga      load an FPGA bitstream\n"
-        "10) apply overlay  apply a device-tree overlay\n"
-        "11) help           show this text\n"
-        " 0) quit\n");
-}
-
-static void menu_status(project::iq_forge &forge, bool initialized, std::optional<bool> dds_on,
-                         std::optional<std::uintptr_t> dds_gpio_base) {
-    std::printf("ad9361: %s\n", initialized ? "initialized" : "not initialized");
-    if (initialized) {
-        std::uint64_t hz = 0;
-        if (forge.get_ad9361_tx_lo_frequency(hz)) {
-            std::printf("tx-lo: %llu Hz\n", static_cast<unsigned long long>(hz));
-        } else {
-            std::printf("tx-lo: error (%d)\n", forge.ad9361_transceiver_error_code());
+// Prompts until a number in [min, max] is entered. nullopt on EOF.
+static std::optional<long> read_choice(const char *prompt, long min, long max) {
+    for (;;) {
+        auto line = read_line(prompt);
+        if (!line) {
+            return std::nullopt;
         }
-
-        std::uint32_t mdb = 0;
-        if (forge.get_ad9361_tx_attenuation(mdb)) {
-            std::printf("tx-atten: %.3f dB\n", mdb / 1000.0);
-        } else {
-            std::printf("tx-atten: error (%d)\n", forge.ad9361_transceiver_error_code());
-        }
-
-        drivers::ensm_state state;
-        if (forge.get_ad9361_ensm_state(state)) {
-            std::printf("tx: %s\n", ensm_state_name(state));
-        } else {
-            std::printf("tx: error (%d)\n", forge.ad9361_transceiver_error_code());
-        }
-    }
-    std::printf("dds gpio base: ");
-    if (dds_gpio_base) {
-        std::printf("0x%llx\n", static_cast<unsigned long long>(*dds_gpio_base));
-        auto enabled = forge.dds_enabled();
-        std::printf("dds: %s\n", enabled ? (*enabled ? "enabled" : "disabled") : "error");
-    } else {
-        std::printf("not set\n");
-        std::printf("dds: %s\n", dds_on ? (*dds_on ? "enabled" : "disabled") : "unknown (not touched this session)");
-    }
-}
-
-// Interactive, number-selected session: keeps one project::iq_forge instance
-// alive for the whole session so 'init', 'tx frequency', 'agc mode' and
-// 'dds on/off' can be issued one at a time instead of passing them all as
-// argv on every invocation. Picks up spi.json / manifest.env from the
-// current directory - no command-line flags needed.
-static int cmd_menu() {
-    std::string config_path = "spi.json";
-    std::optional<std::uintptr_t> ctrl_gpio_base;
-    std::optional<std::uintptr_t> dds_gpio_base;
-
-    if (auto manifest = read_manifest("manifest.env")) {
-        if (auto it = manifest->find("AD9361_CTRL_GPIO_BASE"); it != manifest->end()) {
-            ctrl_gpio_base = static_cast<std::uintptr_t>(std::strtoull(it->second.c_str(), nullptr, 0));
-        }
-        if (auto it = manifest->find("DDS_CTRL_GPIO_BASE"); it != manifest->end()) {
-            dds_gpio_base = static_cast<std::uintptr_t>(std::strtoull(it->second.c_str(), nullptr, 0));
-        }
-    }
-
-    hal::spi_config cfg = hal::load_spi_config(config_path).value_or(hal::spi_config{});
-    project::iq_forge forge(cfg, ctrl_gpio_base, dds_gpio_base);
-
-    bool initialized = false;
-    std::optional<bool> dds_on;
-
-    std::printf("iq_forge interactive menu. Type '11' for help, '0' to quit.\n");
-    if (!dds_gpio_base) {
-        std::printf("note: no DDS control GPIO base (DDS_CTRL_GPIO_BASE in manifest.env) --\n"
-                     "      'dds on/off' will error until one is set\n");
-    }
-    print_menu_help();
-
-    while (true) {
-        std::string sel = prompt_line("> ");
-        if (sel.empty() && std::cin.eof()) {
-            std::printf("\n");
-            break;
-        }
-        if (sel.empty()) {
+        if (line->empty()) {
             continue;
         }
-
         char *end = nullptr;
-        long choice = std::strtol(sel.c_str(), &end, 10);
-        if (end != sel.c_str() + sel.size()) {
-            std::printf("unknown selection '%s' (type 11 for help)\n", sel.c_str());
+        long v = std::strtol(line->c_str(), &end, 10);
+        if (end != line->c_str() + line->size()) {
+            std::printf("enter a number\n");
             continue;
         }
-
-        if (choice == 0) {
-            break;
-        }
-
-        if (choice == 1) {
-            menu_status(forge, initialized, dds_on, dds_gpio_base);
+        if (v < min || v > max) {
+            std::printf("enter a number between %ld and %ld\n", min, max);
             continue;
         }
-
-        if (choice == 2) {
-            if (!forge.bring_up_ad9361()) {
-                std::printf("error: %s\n", forge.ad9361_ctrl_gpio_error().c_str());
-                continue;
-            }
-
-            auto vendor_id = forge.read_ad9361_vendor_id();
-            if (!vendor_id) {
-                std::printf("error: %s\n", forge.ad9361_spi_error().c_str());
-                continue;
-            }
-            std::printf("vendor-id: 0x%02x\n", *vendor_id);
-
-            if (!forge.init_ad9361_transceiver()) {
-                std::printf("error: transceiver init failed (%d)\n", forge.ad9361_transceiver_error_code());
-                continue;
-            }
-            initialized = true;
-            std::printf("ad9361: transceiver initialized\n");
-            continue;
-        }
-
-        if (choice == 3) {
-            auto vendor_id = forge.read_ad9361_vendor_id();
-            if (!vendor_id) {
-                std::printf("error: %s\n", forge.ad9361_spi_error().c_str());
-                continue;
-            }
-            std::printf("vendor-id: 0x%02x\n", *vendor_id);
-            continue;
-        }
-
-        if (choice == 4) {
-            if (!initialized) {
-                std::printf("error: run '2' (init) first\n");
-                continue;
-            }
-            std::string hz_str = prompt_line("TX frequency in Hz (blank = read current): ");
-            if (hz_str.empty()) {
-                std::uint64_t hz = 0;
-                if (!forge.get_ad9361_tx_lo_frequency(hz)) {
-                    std::printf("error: get tx frequency failed (%d)\n", forge.ad9361_transceiver_error_code());
-                    continue;
-                }
-                std::printf("tx-lo: %llu Hz\n", static_cast<unsigned long long>(hz));
-                continue;
-            }
-            auto hz = parse_u64(hz_str);
-            if (!hz) {
-                std::printf("error: invalid frequency '%s'\n", hz_str.c_str());
-                continue;
-            }
-            if (!forge.set_ad9361_tx_lo_frequency(*hz)) {
-                std::printf("error: set tx frequency failed (%d)\n", forge.ad9361_transceiver_error_code());
-                continue;
-            }
-            std::printf("tx-lo: %llu Hz\n", static_cast<unsigned long long>(*hz));
-            continue;
-        }
-
-        if (choice == 5) {
-            if (!initialized) {
-                std::printf("error: run '2' (init) first\n");
-                continue;
-            }
-            std::string db_str = prompt_line("TX attenuation in dB (blank = read current): ");
-            if (db_str.empty()) {
-                std::uint32_t mdb = 0;
-                if (!forge.get_ad9361_tx_attenuation(mdb)) {
-                    std::printf("error: get tx attenuation failed (%d)\n", forge.ad9361_transceiver_error_code());
-                    continue;
-                }
-                std::printf("tx-atten: %.3f dB\n", mdb / 1000.0);
-                continue;
-            }
-            char *db_end = nullptr;
-            double db = std::strtod(db_str.c_str(), &db_end);
-            if (db_end != db_str.c_str() + db_str.size() || db < 0.0) {
-                std::printf("error: invalid attenuation '%s'\n", db_str.c_str());
-                continue;
-            }
-            std::uint32_t mdb = static_cast<std::uint32_t>(db * 1000.0 + 0.5);
-            if (!forge.set_ad9361_tx_attenuation(mdb)) {
-                std::printf("error: set tx attenuation failed (%d)\n", forge.ad9361_transceiver_error_code());
-                continue;
-            }
-            std::printf("tx-atten: %.3f dB\n", mdb / 1000.0);
-            continue;
-        }
-
-        if (choice == 6) {
-            std::string mode_str = prompt_line("AGC mode - 1) manual 2) fast 3) slow 4) hybrid: ");
-            drivers::rx_gain_mode mode;
-            const char *mode_name = nullptr;
-            if (mode_str == "1") {
-                mode = drivers::rx_gain_mode::manual;
-                mode_name = "manual";
-            } else if (mode_str == "2") {
-                mode = drivers::rx_gain_mode::fast_attack_agc;
-                mode_name = "fast";
-            } else if (mode_str == "3") {
-                mode = drivers::rx_gain_mode::slow_attack_agc;
-                mode_name = "slow";
-            } else if (mode_str == "4") {
-                mode = drivers::rx_gain_mode::hybrid_agc;
-                mode_name = "hybrid";
-            } else {
-                std::printf("error: unknown selection '%s'\n", mode_str.c_str());
-                continue;
-            }
-            if (!initialized) {
-                std::printf("error: run '2' (init) first\n");
-                continue;
-            }
-            if (!forge.set_ad9361_rx_gain_control_mode(mode)) {
-                std::printf("error: set agc mode failed (%d)\n", forge.ad9361_transceiver_error_code());
-                continue;
-            }
-            std::printf("agc: %s\n", mode_name);
-            continue;
-        }
-
-        if (choice == 7) {
-            if (!initialized) {
-                std::printf("error: run '2' (init) first\n");
-                continue;
-            }
-            std::string sub = prompt_line("tx - 1) on 2) off (blank = read current state): ");
-            if (sub.empty()) {
-                drivers::ensm_state state;
-                if (!forge.get_ad9361_ensm_state(state)) {
-                    std::printf("error: get ensm state failed (%d)\n", forge.ad9361_transceiver_error_code());
-                    continue;
-                }
-                std::printf("tx: %s\n", ensm_state_name(state));
-                continue;
-            }
-            if (sub != "1" && sub != "2") {
-                std::printf("error: unknown selection '%s'\n", sub.c_str());
-                continue;
-            }
-            bool enable = sub == "1";
-            bool ok = enable ? forge.enable_ad9361_tx() : forge.disable_ad9361_tx();
-            if (!ok) {
-                std::printf("error: %s tx failed (%d)\n", enable ? "enable" : "disable",
-                            forge.ad9361_transceiver_error_code());
-                continue;
-            }
-            std::printf("tx: %s\n", enable ? "enabled" : "disabled");
-            continue;
-        }
-
-        if (choice == 8) {
-            if (!dds_gpio_base) {
-                std::printf("error: no DDS control GPIO base (set DDS_CTRL_GPIO_BASE in manifest.env)\n");
-                continue;
-            }
-            std::string sub = prompt_line("dds - 1) on 2) off (blank = read current state): ");
-            if (sub.empty()) {
-                auto enabled = forge.dds_enabled();
-                if (!enabled) {
-                    std::printf("error: %s\n", forge.dds_ctrl_gpio_error().c_str());
-                    continue;
-                }
-                std::printf("dds: %s\n", *enabled ? "enabled" : "disabled");
-                continue;
-            }
-            if (sub != "1" && sub != "2") {
-                std::printf("error: unknown selection '%s'\n", sub.c_str());
-                continue;
-            }
-            bool enable = sub == "1";
-            if (!forge.set_dds_enabled(enable)) {
-                std::printf("error: %s\n", forge.dds_ctrl_gpio_error().c_str());
-                continue;
-            }
-            dds_on = enable;
-            std::printf("dds: %s\n", enable ? "enabled" : "disabled");
-            continue;
-        }
-
-        if (choice == 9) {
-            std::string path = prompt_line("Bitstream path (blank = cancel): ");
-            if (path.empty()) {
-                continue;
-            }
-            auto result = forge.load_fpga_bitstream(path);
-            if (!result) {
-                std::printf("error: %s\n", result.message.c_str());
-                continue;
-            }
-            std::printf("fpga loaded: state=%s\n", result.state.c_str());
-            continue;
-        }
-
-        if (choice == 10) {
-            std::string name = prompt_line("Overlay name (blank = cancel): ");
-            if (name.empty()) {
-                continue;
-            }
-            std::string dtbo_path = prompt_line("Overlay .dtbo path: ");
-            if (dtbo_path.empty()) {
-                std::printf("error: no .dtbo path given\n");
-                continue;
-            }
-            std::string replace_str = prompt_line("Replace if already applied? 1) yes 2) no [2]: ");
-            bool replace = replace_str == "1";
-            if (!forge.apply_fpga_overlay(name, dtbo_path, replace)) {
-                std::printf("error: failed to apply overlay '%s'\n", name.c_str());
-                continue;
-            }
-            std::printf("overlay '%s' applied\n", name.c_str());
-            continue;
-        }
-
-        if (choice == 11) {
-            print_menu_help();
-            continue;
-        }
-
-        std::printf("unknown selection '%s' (type 11 for help)\n", sel.c_str());
+        return v;
     }
-
-    return EXIT_SUCCESS;
 }
 
-static int cmd_start() {
+static std::optional<std::uint64_t> read_u64(const char *prompt) {
+    auto line = read_line(prompt);
+    if (!line) {
+        return std::nullopt;
+    }
+    return parse_u64(*line);
+}
+
+static std::optional<double> read_double(const char *prompt) {
+    auto line = read_line(prompt);
+    if (!line || line->empty()) {
+        return std::nullopt;
+    }
+    char *end = nullptr;
+    double v = std::strtod(line->c_str(), &end);
+    if (end != line->c_str() + line->size()) {
+        return std::nullopt;
+    }
+    return v;
+}
+
+// Sub-menus. Each returns nullopt on "0) back" or EOF - callers just abandon
+// the action in that case rather than distinguishing the two.
+
+static std::optional<drivers::rx_gain_mode> select_agc_mode() {
+    std::printf("\n 1) manual\n 2) fast attack agc\n 3) slow attack agc\n 4) hybrid agc\n 0) back\n");
+    auto choice = read_choice("> ", 0, 4);
+    if (!choice || *choice == 0) {
+        return std::nullopt;
+    }
+    switch (*choice) {
+        case 1: return drivers::rx_gain_mode::manual;
+        case 2: return drivers::rx_gain_mode::fast_attack_agc;
+        case 3: return drivers::rx_gain_mode::slow_attack_agc;
+        default: return drivers::rx_gain_mode::hybrid_agc;
+    }
+}
+
+static std::optional<bool> select_on_off() {
+    std::printf("\n 1) on\n 2) off\n 0) back\n");
+    auto choice = read_choice("> ", 0, 2);
+    if (!choice || *choice == 0) {
+        return std::nullopt;
+    }
+    return *choice == 1;
+}
+
+static void print_menu() {
+    std::printf(
+        "\n"
+        "==== iq_forge console ====\n"
+        " 1) TX LO frequency - read\n"
+        " 2) TX LO frequency - set\n"
+        " 3) TX attenuation - read\n"
+        " 4) TX attenuation - set\n"
+        " 5) RX AGC mode - set\n"
+        " 6) TX enable/disable\n"
+        " 7) TX state - read (ENSM)\n"
+        " 8) DDS enable/disable\n"
+        " 9) DDS state - read\n"
+        "10) DDS phase increment - set (not supported by current bitstream)\n"
+        "11) DDS reset (not supported by current bitstream)\n"
+        " 0) exit\n");
+}
+
+static void run_menu(project::iq_forge &forge) {
+    for (;;) {
+        print_menu();
+        auto choice = read_choice("> ", 0, 11);
+        if (!choice || *choice == 0) {
+            return;
+        }
+
+        switch (*choice) {
+            case 1: {
+                std::uint64_t hz = 0;
+                if (forge.get_ad9361_tx_lo_frequency(hz)) {
+                    std::printf("tx-lo: %llu Hz\n", static_cast<unsigned long long>(hz));
+                } else {
+                    std::printf("error: get tx frequency failed (%d)\n", forge.ad9361_transceiver_error_code());
+                }
+                break;
+            }
+            case 2: {
+                auto hz = read_u64("Enter TX LO frequency in Hz: ");
+                if (!hz) {
+                    std::printf("invalid or cancelled\n");
+                    break;
+                }
+                if (forge.set_ad9361_tx_lo_frequency(*hz)) {
+                    std::printf("tx-lo: %llu Hz\n", static_cast<unsigned long long>(*hz));
+                } else {
+                    std::printf("error: set tx frequency failed (%d)\n", forge.ad9361_transceiver_error_code());
+                }
+                break;
+            }
+            case 3: {
+                std::uint32_t mdb = 0;
+                if (forge.get_ad9361_tx_attenuation(mdb)) {
+                    std::printf("tx-atten: %.3f dB\n", mdb / 1000.0);
+                } else {
+                    std::printf("error: get tx attenuation failed (%d)\n", forge.ad9361_transceiver_error_code());
+                }
+                break;
+            }
+            case 4: {
+                auto db = read_double("Enter TX attenuation in dB: ");
+                if (!db || *db < 0.0) {
+                    std::printf("invalid or cancelled\n");
+                    break;
+                }
+                std::uint32_t mdb = static_cast<std::uint32_t>(*db * 1000.0 + 0.5);
+                if (forge.set_ad9361_tx_attenuation(mdb)) {
+                    std::printf("tx-atten: %.3f dB\n", mdb / 1000.0);
+                } else {
+                    std::printf("error: set tx attenuation failed (%d)\n", forge.ad9361_transceiver_error_code());
+                }
+                break;
+            }
+            case 5: {
+                auto mode = select_agc_mode();
+                if (!mode) {
+                    break;
+                }
+                if (!forge.set_ad9361_rx_gain_control_mode(*mode)) {
+                    std::printf("error: set agc mode failed (%d)\n", forge.ad9361_transceiver_error_code());
+                }
+                break;
+            }
+            case 6: {
+                auto on = select_on_off();
+                if (!on) {
+                    break;
+                }
+                bool ok = *on ? forge.enable_ad9361_tx() : forge.disable_ad9361_tx();
+                if (ok) {
+                    std::printf("tx: %s\n", *on ? "enabled" : "disabled");
+                } else {
+                    std::printf("error: %s tx failed (%d)\n", *on ? "enable" : "disable",
+                                forge.ad9361_transceiver_error_code());
+                }
+                break;
+            }
+            case 7: {
+                drivers::ensm_state state;
+                if (forge.get_ad9361_ensm_state(state)) {
+                    std::printf("tx: %s\n", ensm_state_name(state));
+                } else {
+                    std::printf("error: get ensm state failed (%d)\n", forge.ad9361_transceiver_error_code());
+                }
+                break;
+            }
+            case 8: {
+                auto on = select_on_off();
+                if (!on) {
+                    break;
+                }
+                if (forge.set_dds_enabled(*on)) {
+                    std::printf("dds: %s\n", *on ? "enabled" : "disabled");
+                } else {
+                    std::printf("error: %s\n", forge.dds_ctrl_gpio_error().c_str());
+                }
+                break;
+            }
+            case 9: {
+                auto enabled = forge.dds_enabled();
+                if (enabled) {
+                    std::printf("dds: %s\n", *enabled ? "enabled" : "disabled");
+                } else {
+                    std::printf("error: %s\n", forge.dds_ctrl_gpio_error().c_str());
+                }
+                break;
+            }
+            case 10:
+                std::printf("not supported: axi_gpio_dds_ctrl has no phase-increment (FTW) register in the\n"
+                             "current bitstream - it's hardwired to a constant in the HDL. See\n"
+                             "iq_forge_hdl/docs/regmap.md.\n");
+                break;
+            case 11:
+                std::printf("not supported: the DDS core has no reset input wired up in the current\n"
+                             "bitstream - disabling it only freezes the phase accumulator, it doesn't\n"
+                             "reset it. See iq_forge_hdl/docs/regmap.md.\n");
+                break;
+            default:
+                break;
+        }
+    }
+}
+
+int main(int argc, char **argv) {
+    if (argc >= 2 &&
+        (std::strcmp(argv[1], "--help") == 0 || std::strcmp(argv[1], "-h") == 0 || std::strcmp(argv[1], "help") == 0)) {
+        usage(argv[0]);
+        return EXIT_SUCCESS;
+    }
+
     auto manifest = read_manifest("manifest.env");
     if (!manifest) {
         std::fprintf(stderr, "error: cannot open manifest.env\n");
@@ -460,8 +346,12 @@ static int cmd_start() {
     if (auto it = manifest->find("AD9361_CTRL_GPIO_BASE"); it != manifest->end()) {
         ad9361_ctrl_gpio_base = static_cast<std::uintptr_t>(std::strtoull(it->second.c_str(), nullptr, 0));
     }
+    std::optional<std::uintptr_t> dds_ctrl_gpio_base;
+    if (auto it = manifest->find("DDS_CTRL_GPIO_BASE"); it != manifest->end()) {
+        dds_ctrl_gpio_base = static_cast<std::uintptr_t>(std::strtoull(it->second.c_str(), nullptr, 0));
+    }
 
-    project::iq_forge forge(spi_cfg, ad9361_ctrl_gpio_base);
+    project::iq_forge forge(spi_cfg, ad9361_ctrl_gpio_base, dds_ctrl_gpio_base);
 
     if (forge.fpga_state() == "operating") {
         std::printf("fpga already operating, skip reload\n");
@@ -502,18 +392,6 @@ static int cmd_start() {
     }
     std::printf("ad9361: transceiver initialized\n");
 
+    run_menu(forge);
     return EXIT_SUCCESS;
-}
-
-int main(int argc, char **argv) {
-    if (argc < 2) {
-        return cmd_start();
-    }
-
-    if (std::string(argv[1]) == "menu") {
-        return cmd_menu();
-    }
-
-    usage(argv[0]);
-    return EXIT_FAILURE;
 }
