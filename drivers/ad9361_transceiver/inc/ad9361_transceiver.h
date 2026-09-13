@@ -52,6 +52,13 @@ namespace drivers {
         invalid = 0xFF,
     };
 
+    // Mirrors enum ad9361_bist_mode (ad9361.h).
+    enum class bist_mode : std::uint8_t {
+        disable = 0,
+        inject_tx = 1,
+        inject_rx = 2,
+    };
+
     class ad9361_transceiver {
         public:
             explicit ad9361_transceiver(const hal::spi_config &spi_config,
@@ -114,6 +121,28 @@ namespace drivers {
             // sweeping bit-by-bit against a known-good signal.
             bool set_lvds_invert(std::uint8_t ctrl1, std::uint8_t ctrl2);
             bool get_lvds_invert(std::uint8_t &ctrl1, std::uint8_t &ctrl2);
+
+            // AD9361's own internal self-test (REG_BIST_CONFIG) - a tone or
+            // PRBS pattern generated INSIDE the chip (ahead of the TX FIR/
+            // DAC), entirely bypassing whatever comes in over our LVDS
+            // port. Useful to split the problem in half: clean RF from
+            // this while our own DDS tone is bad means the analog TX
+            // chain/LO/calibration are fine and the fault is in the
+            // digital interface content/timing; still bad here too means
+            // the fault is upstream (PLL/mixer/filters/LO leakage cal).
+            // mask selects TX1_I/TX1_Q/TX2_I/TX2_Q (bit0..3) - use 0x3 for
+            // TX1 I+Q. Remember to call with mode=disable afterwards to
+            // hand the DAC back to the real digital interface.
+            bool set_bist_tone(bist_mode mode, std::uint32_t freq_hz, std::uint32_t level_db, std::uint32_t mask);
+            bool set_bist_prbs(bist_mode mode);
+
+            // AD9361's internal TX->RX digital loopback (mode=1) - loops
+            // whatever it received on the TX digital port straight back
+            // out the RX digital port, inside the chip, no DAC/mixer/ADC
+            // involved. Pairs with an FPGA-side RX capture
+            // (ad9361_rx_lvds_wrapper) to verify data sent out
+            // ad9361_tx_lvds actually arrives at the chip correctly.
+            bool set_bist_loopback(std::int32_t mode);
 
             bool is_initialized() const noexcept;
 

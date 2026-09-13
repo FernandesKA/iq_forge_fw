@@ -269,4 +269,46 @@ namespace drivers {
         return true;
     }
 
+    bool ad9361_transceiver::set_bist_tone(bist_mode mode, std::uint32_t freq_hz, std::uint32_t level_db,
+                                            std::uint32_t mask) {
+        if (!m_phy) {
+            return false;
+        }
+
+        std::int32_t ret = ad9361_transceiver_shim_bist_tone(
+            m_phy, static_cast<std::int32_t>(static_cast<std::uint8_t>(mode)), freq_hz, level_db, mask);
+        if (ret < 0) {
+            m_error_code = ret;
+            return false;
+        }
+        return true;
+    }
+
+    bool ad9361_transceiver::set_bist_prbs(bist_mode mode) {
+        if (!m_phy) {
+            return false;
+        }
+
+        std::int32_t ret =
+            ad9361_transceiver_shim_bist_prbs(m_phy, static_cast<std::int32_t>(static_cast<std::uint8_t>(mode)));
+        if (ret < 0) {
+            m_error_code = ret;
+            return false;
+        }
+        return true;
+    }
+
+    bool ad9361_transceiver::set_bist_loopback(std::int32_t mode) {
+        if (!m_phy) {
+            return false;
+        }
+
+        std::int32_t ret = ad9361_transceiver_shim_bist_loopback(m_phy, mode);
+        if (ret < 0) {
+            m_error_code = ret;
+            return false;
+        }
+        return true;
+    }
+
 } // namespace drivers

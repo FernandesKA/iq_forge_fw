@@ -174,6 +174,19 @@ namespace project {
         return m_ad9361_transceiver.get_lvds_invert(ctrl1, ctrl2);
     }
 
+    bool iq_forge::set_ad9361_bist_tone(drivers::bist_mode mode, std::uint32_t freq_hz, std::uint32_t level_db,
+                                        std::uint32_t mask) {
+        return m_ad9361_transceiver.set_bist_tone(mode, freq_hz, level_db, mask);
+    }
+
+    bool iq_forge::set_ad9361_bist_prbs(drivers::bist_mode mode) {
+        return m_ad9361_transceiver.set_bist_prbs(mode);
+    }
+
+    bool iq_forge::set_ad9361_bist_loopback(std::int32_t mode) {
+        return m_ad9361_transceiver.set_bist_loopback(mode);
+    }
+
     bool iq_forge::set_dds_enabled(bool enabled) const {
         if (!m_dds_ctrl_gpio_base) {
             m_dds_ctrl_gpio_last_error.clear();

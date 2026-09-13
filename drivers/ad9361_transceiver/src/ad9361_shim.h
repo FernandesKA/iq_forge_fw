@@ -76,6 +76,40 @@ int32_t ad9361_transceiver_shim_set_lvds_invert(void *phy, uint8_t ctrl1, uint8_
 
 int32_t ad9361_transceiver_shim_get_lvds_invert(void *phy, uint8_t *ctrl1, uint8_t *ctrl2);
 
+/* AD9361's own self-test facilities (REG_BIST_CONFIG) - independent of
+ * ad9361_dig_tune/ad9361_hdl_loopback (stubbed on this port, need an
+ * FPGA-side BIST/DMA core we don't have). Useful to isolate whether a bad
+ * signal is coming from our digital LVDS data or from the analog chain:
+ *
+ * - bist_tone(mode=INJ_TX, ...) makes AD9361 generate a tone INSIDE the
+ *   chip (BIST_CTRL_POINT(0), injected ahead of the TX FIR/DAC), entirely
+ *   bypassing whatever we send over the LVDS port. Clean RF from this =
+ *   analog TX chain + LO + calibration are fine, problem is digital
+ *   interface content/timing. Still bad = problem is upstream of the
+ *   digital interface (PLL/mixer/filters/LO leakage cal).
+ * - bist_prbs(mode=INJ_TX) does the same but with a PRBS pattern instead
+ *   of a tone - useful as a wideband noise-floor/linearity check.
+ *
+ * mode: 0=disable, 1=inject on TX, 2=inject on RX (ad9361_bist_mode enum
+ * in ad9361.h - passed as plain int here since ad9361_api.h doesn't
+ * expose that type; the enum has no explicit underlying type, so it's
+ * `int`-sized like int32_t on this target). mask selects which of
+ * TX1_I/TX1_Q/TX2_I/TX2_Q get the injected signal (bit0=TX1_I,
+ * bit1=TX1_Q, bit2=TX2_I, bit3=TX2_Q) - for TX1 I+Q use mask=0x3. */
+int32_t ad9361_transceiver_shim_bist_tone(void *phy, int32_t mode, uint32_t freq_hz, uint32_t level_db,
+                                           uint32_t mask);
+
+int32_t ad9361_transceiver_shim_bist_prbs(void *phy, int32_t mode);
+
+/* AD9361's internal digital TX->RX loopback (REG_OBSERVE_CONFIG,
+ * DATA_PORT_LOOP_TEST_ENABLE): mode 0=off, 1=loop TX digital data
+ * straight back to the RX digital port INSIDE the chip (no DAC/mixer/
+ * ADC involved), 2=loop RX->TX via the FPGA (needs ad9361_hdl_loopback,
+ * stubbed on this port - don't use). Mode 1 is what lets
+ * ad9361_rx_lvds_wrapper on the FPGA see exactly what the chip received
+ * from ad9361_tx_lvds, to verify data integrity end to end. */
+int32_t ad9361_transceiver_shim_bist_loopback(void *phy, int32_t mode);
+
 #ifdef __cplusplus
 }
 #endif

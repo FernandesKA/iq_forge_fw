@@ -213,8 +213,20 @@ const AD9361_InitParam ad9361_default_init_param = {
 	.delay_rx_data = 0,
 	.rx_data_clock_delay = 0,
 	.rx_data_delay = 4,
-	.tx_fb_clock_delay = 7,
-	.tx_data_delay = 0,
+	// Verified via AD9361's internal TX->RX digital loopback
+	// (ad9361_bist_loopback mode=1) + an FPGA-side RX capture
+	// (ad9361_rx_lvds_wrapper, JTAG ILA): with the old fb_clk_delay=7/
+	// tx_data_delay=0, the looped-back I channel was scrambled (median
+	// sample-to-sample jump ~1600 out of a ~2047 full-scale magnitude -
+	// essentially garbage), while Q came back clean - a real, bit-level
+	// digital-interface timing fault, not analog noise. Swept both taps
+	// against that same loopback capture: fb_clk_delay=0 with
+	// tx_data_delay>=2 reconstructs both channels bit-exactly (constant
+	// magnitude, std=0.3 out of ~2047; phase step per sample matches
+	// the commanded FTW to 6 decimal places). 4 chosen as a safe middle
+	// value away from the tx_data_delay=1 edge (still slightly off).
+	.tx_fb_clock_delay = 0,
+	.tx_data_delay = 4,
 	.lvds_bias_mV = 150,
 	.lvds_rx_onchip_termination_enable = 1,
 	.rx1rx2_phase_inversion_en = 0,

@@ -109,6 +109,16 @@ namespace project {
             bool set_ad9361_lvds_invert(std::uint8_t ctrl1, std::uint8_t ctrl2);
             bool get_ad9361_lvds_invert(std::uint8_t &ctrl1, std::uint8_t &ctrl2);
 
+            // AD9361's own internal BIST tone/PRBS (REG_BIST_CONFIG) - a
+            // signal generated INSIDE the chip ahead of the TX FIR/DAC,
+            // bypassing our LVDS digital interface entirely. See
+            // ad9361_transceiver::set_bist_tone for how to use this to
+            // isolate a digital-interface fault from an analog one.
+            bool set_ad9361_bist_tone(drivers::bist_mode mode, std::uint32_t freq_hz, std::uint32_t level_db,
+                                       std::uint32_t mask);
+            bool set_ad9361_bist_prbs(drivers::bist_mode mode);
+            bool set_ad9361_bist_loopback(std::int32_t mode);
+
             // Enables/disables the DDS TX chain's sine output via
             // axi_gpio_dds_ctrl (see
             // https://github.com/FernandesKA/iq_forge_hdl/blob/main/docs/regmap.md).

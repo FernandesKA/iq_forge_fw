@@ -421,13 +421,19 @@ static void print_menu() {
         "17) LVDS invert - read (ctrl1/ctrl2)\n"
         "18) LVDS invert - set (ctrl1/ctrl2, raw byte 0-255)\n"
         "19) LVDS invert - interactive tune (bit toggle, live)\n"
+        "20) AD9361 internal BIST tone - enable (TX1, bypasses LVDS/DDS)\n"
+        "21) AD9361 internal BIST PRBS - enable (TX1, bypasses LVDS/DDS)\n"
+        "22) AD9361 internal BIST - disable (back to normal digital data)\n"
+        "23) AD9361 TX->RX digital loopback - enable (verify TX_D/TX_FRAME\n"
+        "    data actually reaches the chip, via ad9361_rx_lvds_wrapper)\n"
+        "24) AD9361 TX->RX digital loopback - disable\n"
         " 0) exit\n");
 }
 
 static void run_menu(project::iq_forge &forge) {
     for (;;) {
         print_menu();
-        auto choice = read_choice("> ", 0, 19);
+        auto choice = read_choice("> ", 0, 24);
         if (!choice || *choice == 0) {
             return;
         }
@@ -639,6 +645,57 @@ static void run_menu(project::iq_forge &forge) {
             }
             case 19: {
                 run_lvds_invert_tuner(forge);
+                break;
+            }
+            case 20: {
+                auto hz = read_u64("Enter BIST tone frequency in Hz (0 for DC): ");
+                if (!hz) {
+                    std::printf("invalid or cancelled\n");
+                    break;
+                }
+                // mask=0: BIST_MASK_CHANNEL_x bits *exclude* a channel from
+                // injection, not include it - 0 masks nothing, so the tone
+                // goes out on all channels (only TX1 is wired up here
+                // anyway). level_db=0: full scale.
+                if (forge.set_ad9361_bist_tone(drivers::bist_mode::inject_tx, static_cast<std::uint32_t>(*hz), 0,
+                                                0x0)) {
+                    std::printf("bist-tone: enabled at %llu Hz on TX1 (item 22 to disable)\n",
+                                static_cast<unsigned long long>(*hz));
+                } else {
+                    std::printf("error: bist tone failed (%d)\n", forge.ad9361_transceiver_error_code());
+                }
+                break;
+            }
+            case 21: {
+                if (forge.set_ad9361_bist_prbs(drivers::bist_mode::inject_tx)) {
+                    std::printf("bist-prbs: enabled on TX1 (item 22 to disable)\n");
+                } else {
+                    std::printf("error: bist prbs failed (%d)\n", forge.ad9361_transceiver_error_code());
+                }
+                break;
+            }
+            case 22: {
+                if (forge.set_ad9361_bist_prbs(drivers::bist_mode::disable)) {
+                    std::printf("bist: disabled\n");
+                } else {
+                    std::printf("error: bist disable failed (%d)\n", forge.ad9361_transceiver_error_code());
+                }
+                break;
+            }
+            case 23: {
+                if (forge.set_ad9361_bist_loopback(1)) {
+                    std::printf("loopback: enabled (TX digital data now mirrored to RX digital port)\n");
+                } else {
+                    std::printf("error: loopback enable failed (%d)\n", forge.ad9361_transceiver_error_code());
+                }
+                break;
+            }
+            case 24: {
+                if (forge.set_ad9361_bist_loopback(0)) {
+                    std::printf("loopback: disabled\n");
+                } else {
+                    std::printf("error: loopback disable failed (%d)\n", forge.ad9361_transceiver_error_code());
+                }
                 break;
             }
             default:

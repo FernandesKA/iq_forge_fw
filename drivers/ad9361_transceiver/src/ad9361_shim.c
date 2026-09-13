@@ -173,3 +173,23 @@ int32_t ad9361_transceiver_shim_get_lvds_invert(void *phy, uint8_t *ctrl1, uint8
 {
 	return ad9361_get_lvds_invert((struct ad9361_rf_phy *)phy, ctrl1, ctrl2);
 }
+
+/* ad9361_bist_tone/ad9361_bist_prbs (declared in ad9361.h, which is
+ * already pulled in transitively via ad9361_util.h) take `enum
+ * ad9361_bist_mode`, not a plain int - shim.h keeps the public parameter
+ * as int32_t (0/1/2) since it doesn't include ad9361.h, so cast here. */
+int32_t ad9361_transceiver_shim_bist_tone(void *phy, int32_t mode, uint32_t freq_hz, uint32_t level_db,
+                                           uint32_t mask)
+{
+	return ad9361_bist_tone((struct ad9361_rf_phy *)phy, (enum ad9361_bist_mode)mode, freq_hz, level_db, mask);
+}
+
+int32_t ad9361_transceiver_shim_bist_prbs(void *phy, int32_t mode)
+{
+	return ad9361_bist_prbs((struct ad9361_rf_phy *)phy, (enum ad9361_bist_mode)mode);
+}
+
+int32_t ad9361_transceiver_shim_bist_loopback(void *phy, int32_t mode)
+{
+	return ad9361_bist_loopback((struct ad9361_rf_phy *)phy, mode);
+}
