@@ -73,11 +73,6 @@ namespace project {
             return false;
         }
 
-        // ad9361_default_init_param hardcodes TX_SAMPL_FREQ=30.72 MSPS (an
-        // ADI reference-design default) - dds_tx_chain actually delivers
-        // samples at dds_clk_hz/2 (see ad9361_transceiver::set_tx_sample_rate).
-        // Best-effort: no dds_clk_hz means no DDS on this board (or an
-        // fw_config without it), nothing to correct.
         if (m_dds_clk_hz) {
             std::uint32_t rate = static_cast<std::uint32_t>(*m_dds_clk_hz / 2.0);
             if (!m_ad9361_transceiver.set_tx_sample_rate(rate)) {
@@ -103,15 +98,6 @@ namespace project {
     }
 
     bool iq_forge::set_ad9361_tx_lo_frequency(std::uint64_t hz) {
-        // set_tx_lo_frequency() retunes the synth and then runs TX_QUAD_CAL
-        // (see ad9361_transceiver::set_tx_lo_frequency). That calibration
-        // needs a quiet TX baseband to measure against - if the DDS is
-        // still driving a tone through it (its FPGA-side enable bit
-        // survives across ad9361_init(), unlike anything on the AD9361
-        // itself), the calibration comes out ~30 dB worse (confirmed on
-        // hardware: residual LO leakage dropped from ~156 dB to ~125 dB
-        // just from muting the DDS first). Mute it for the retune+cal, then
-        // put it back the way it was.
         std::optional<bool> was_enabled = dds_enabled();
         if (was_enabled && *was_enabled) {
             set_dds_enabled(false);
@@ -269,11 +255,7 @@ namespace project {
             return false;
         }
 
-        constexpr double kAccScale = 16777216.0; // 2^24
-        // The phase accumulator only advances on i_ce = i_en & lvds_phase_sel,
-        // and lvds_phase_sel toggles every i_clk cycle (ad9361_tx_lvds.sv) -
-        // so it actually accumulates at dds_clk_hz/2, not dds_clk_hz. See
-        // regmap.md's f_out formula.
+        constexpr double kAccScale = 16777216.0;
         double sample_rate_hz = *m_dds_clk_hz / 2.0;
         std::uint32_t ftw = static_cast<std::uint32_t>(hz * kAccScale / sample_rate_hz + 0.5);
         return set_dds_ftw(ftw);
@@ -290,7 +272,7 @@ namespace project {
             return std::nullopt;
         }
 
-        constexpr double kAccScale = 16777216.0; // 2^24
+        constexpr double kAccScale = 16777216.0;
         double sample_rate_hz = *m_dds_clk_hz / 2.0;
         return *ftw * sample_rate_hz / kAccScale;
     }

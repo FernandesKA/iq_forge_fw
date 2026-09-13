@@ -43,37 +43,18 @@ namespace project {
 
             bool apply_fpga_overlay(const std::string &name, const std::filesystem::path &dtbo_path, bool replace = false);
 
-            // Raw fpga_manager state (e.g. "operating") - use to skip a redundant reload.
             std::string fpga_state() const;
 
-            // Raw overlay status (e.g. "applied") - use to skip a redundant re-apply.
             std::string overlay_status(const std::string &name) const;
 
-            // Releases the AD9361 out of hardware reset via axi_gpio_ad9361_ctrl (see
-            // https://github.com/FernandesKA/iq_forge_hdl/blob/main/docx/regmap.md).
-            // No-op if constructed without ad9361_ctrl_gpio_base (e.g. rk7020f, which
-            // ties those pins to fixed constants in the PL and has no such GPIO).
-            // Must run before any AD9361 SPI access - the chip stays in reset
-            // (and SPI reads back a floating bus) until this write happens.
             bool bring_up_ad9361() const;
             const std::string &ad9361_ctrl_gpio_error() const;
 
-            // Also reconfigures AD9361's TX (and RX) sample rate to
-            // dds_clk_hz/2 if dds_clk_hz was supplied - see
-            // ad9361_transceiver::set_tx_sample_rate for why (the default
-            // init params hardcode an unrelated 30.72 MSPS ADI reference
-            // rate). No-op for that step if dds_clk_hz wasn't supplied.
             bool init_ad9361_transceiver();
             std::int32_t ad9361_transceiver_error_code() const;
 
             bool ad9361_transceiver_ready() const;
 
-            // Retunes the TX LO and recalibrates TX quadrature/LO-leakage
-            // for it (see ad9361_transceiver::set_tx_lo_frequency). Mutes
-            // the DDS for the duration if it was enabled - the calibration
-            // needs a quiet baseband, and the DDS enable bit survives
-            // AD9361 reinit so it can easily be left on from a previous
-            // run - then restores it.
             bool set_ad9361_tx_lo_frequency(std::uint64_t hz);
             bool get_ad9361_tx_lo_frequency(std::uint64_t &hz);
 
@@ -85,71 +66,32 @@ namespace project {
             bool enable_ad9361_tx();
             bool disable_ad9361_tx();
 
-            // Live readback of the chip's ENSM state (what it's actually
-            // doing right now), not just what was last commanded.
             bool get_ad9361_ensm_state(drivers::ensm_state &state);
 
-            // Manual TX digital-interface delay tuning (REG_TX_CLOCK_DATA_DELAY,
-            // fb_clk_delay/tx_data_delay 0-15 each) - see
-            // drivers::ad9361_transceiver::set_tx_clock_data_delay for why
-            // this exists (dig_tune()/hdl_loopback() are stubbed out on this
-            // bare-metal port, so the TX LVDS sampling point is never
-            // auto-calibrated; sweep these by hand against a known signal).
             bool set_ad9361_tx_clock_data_delay(std::uint8_t fb_clk_delay, std::uint8_t tx_data_delay);
             bool get_ad9361_tx_clock_data_delay(std::uint8_t &fb_clk_delay, std::uint8_t &tx_data_delay);
 
-            // Forces a TX quadrature/LO-leakage recalibration at the
-            // current TX LO. set_ad9361_tx_lo_frequency() already calls
-            // this automatically - exposed standalone for recalibrating
-            // without a frequency change (e.g. after an attenuation change).
             bool calibrate_ad9361_tx_quadrature();
 
-            // Raw REG_LVDS_INVERT_CTRL1/2 (TX_FRAME/TX_D[5:0] and RX-side/
-            // clock invert bits) - see ad9361_transceiver::set_lvds_invert.
             bool set_ad9361_lvds_invert(std::uint8_t ctrl1, std::uint8_t ctrl2);
             bool get_ad9361_lvds_invert(std::uint8_t &ctrl1, std::uint8_t &ctrl2);
 
-            // AD9361's own internal BIST tone/PRBS (REG_BIST_CONFIG) - a
-            // signal generated INSIDE the chip ahead of the TX FIR/DAC,
-            // bypassing our LVDS digital interface entirely. See
-            // ad9361_transceiver::set_bist_tone for how to use this to
-            // isolate a digital-interface fault from an analog one.
             bool set_ad9361_bist_tone(drivers::bist_mode mode, std::uint32_t freq_hz, std::uint32_t level_db,
                                        std::uint32_t mask);
             bool set_ad9361_bist_prbs(drivers::bist_mode mode);
             bool set_ad9361_bist_loopback(std::int32_t mode);
 
-            // Enables/disables the DDS TX chain's sine output via
-            // axi_gpio_dds_ctrl (see
-            // https://github.com/FernandesKA/iq_forge_hdl/blob/main/docs/regmap.md).
-            // No-op (returns true) if constructed without dds_ctrl_gpio_base
-            // (e.g. rk7020f, which ties i_en to a fixed constant in the PL).
             bool set_dds_enabled(bool enabled) const;
 
-            // Live readback of axi_gpio_dds_ctrl. nullopt if constructed
-            // without dds_ctrl_gpio_base or the register read failed (see
-            // dds_ctrl_gpio_error()).
             std::optional<bool> dds_enabled() const;
 
-            // Pulses dds_rst via axi_gpio_dds_ctrl (see dds_ctrl_gpio::reset()).
-            // No-op (returns true) if constructed without dds_ctrl_gpio_base.
             bool reset_dds() const;
 
             const std::string &dds_ctrl_gpio_error() const;
 
-            // Raw FTW register access via axi_gpio_dds_ftw. No-op (returns
-            // true) / nullopt if constructed without dds_ftw_gpio_base.
             bool set_dds_ftw(std::uint32_t ftw) const;
             std::optional<std::uint32_t> get_dds_ftw() const;
 
-            // Hz convenience on top of the FTW register: f_out = ftw *
-            // (dds_clk_hz / 2) / 2^24 - the phase accumulator only advances
-            // on i_ce = i_en & lvds_phase_sel, which toggles every i_clk
-            // cycle (ad9361_tx_lvds.sv), so it accumulates at dds_clk_hz/2,
-            // not dds_clk_hz. Requires both dds_ftw_gpio_base and
-            // dds_clk_hz to have been supplied at construction (the clock
-            // is board-specific - 50 MHz on pluto_sky, 40 MHz on rk7020f -
-            // so there's no safe default to fall back to).
             bool set_dds_frequency_hz(double hz) const;
             std::optional<double> get_dds_frequency_hz() const;
 
@@ -162,10 +104,6 @@ namespace project {
             fpga::FpgaManager m_fpga_manager;
             fpga::DtOverlay m_dt_overlay;
 
-            // Only the address is stored - the mmio mapping itself is made on
-            // demand in bring_up_ad9361(), since the AXI GPIO it points at
-            // isn't backed by anything until after the FPGA bitstream loads,
-            // which happens after this class is constructed.
             std::optional<std::uintptr_t> m_ad9361_ctrl_gpio_base;
             std::optional<std::uintptr_t> m_dds_ctrl_gpio_base;
             std::optional<std::uintptr_t> m_dds_ftw_gpio_base;

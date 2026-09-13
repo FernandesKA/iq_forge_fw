@@ -114,8 +114,6 @@ int32_t ad9361_transceiver_shim_disable_tx(void *phy)
 	return ad9361_set_en_state_machine_mode((struct ad9361_rf_phy *)phy, ENSM_MODE_ALERT);
 }
 
-/* Declared in ad9361.h (not the public ad9361_api.h) - avoid pulling that
- * lower-level header in just for one status readback. */
 extern uint8_t ad9361_ensm_get_state(struct ad9361_rf_phy *phy);
 
 int32_t ad9361_transceiver_shim_get_ensm_state(void *phy, uint8_t *state)
@@ -124,8 +122,6 @@ int32_t ad9361_transceiver_shim_get_ensm_state(void *phy, uint8_t *state)
 	return 0;
 }
 
-/* Also declared in ad9361.h only - see the comment on
- * ad9361_set_tx_clock_data_delay in ad9361.c for why these exist. */
 extern int32_t ad9361_set_tx_clock_data_delay(struct ad9361_rf_phy *phy,
 					       uint8_t fb_clk_delay, uint8_t tx_data_delay);
 extern int32_t ad9361_get_tx_clock_data_delay(struct ad9361_rf_phy *phy,
@@ -141,8 +137,6 @@ int32_t ad9361_transceiver_shim_get_tx_clock_data_delay(void *phy, uint8_t *fb_c
 	return ad9361_get_tx_clock_data_delay((struct ad9361_rf_phy *)phy, fb_clk_delay, tx_data_delay);
 }
 
-/* TX_QUAD_CAL = (1 << 4) - defined in ad9361.h (not the public ad9361_api.h,
- * which is what's included here), see the switch in ad9361_do_calib_run(). */
 #define AD9361_SHIM_TX_QUAD_CAL (1 << 4)
 
 int32_t ad9361_transceiver_shim_calibrate_tx_quad(void *phy)
@@ -160,7 +154,6 @@ int32_t ad9361_transceiver_shim_get_tx_sampling_freq(void *phy, uint32_t *sampli
 	return ad9361_get_tx_sampling_freq((struct ad9361_rf_phy *)phy, sampling_freq_hz);
 }
 
-/* Also declared in ad9361.h only. */
 extern int32_t ad9361_set_lvds_invert(struct ad9361_rf_phy *phy, uint8_t ctrl1, uint8_t ctrl2);
 extern int32_t ad9361_get_lvds_invert(struct ad9361_rf_phy *phy, uint8_t *ctrl1, uint8_t *ctrl2);
 
@@ -174,10 +167,6 @@ int32_t ad9361_transceiver_shim_get_lvds_invert(void *phy, uint8_t *ctrl1, uint8
 	return ad9361_get_lvds_invert((struct ad9361_rf_phy *)phy, ctrl1, ctrl2);
 }
 
-/* ad9361_bist_tone/ad9361_bist_prbs (declared in ad9361.h, which is
- * already pulled in transitively via ad9361_util.h) take `enum
- * ad9361_bist_mode`, not a plain int - shim.h keeps the public parameter
- * as int32_t (0/1/2) since it doesn't include ad9361.h, so cast here. */
 int32_t ad9361_transceiver_shim_bist_tone(void *phy, int32_t mode, uint32_t freq_hz, uint32_t level_db,
                                            uint32_t mask)
 {

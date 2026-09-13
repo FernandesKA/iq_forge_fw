@@ -190,9 +190,17 @@ const AD9361_InitParam ad9361_default_init_param = {
 	// (~40-49dB SNR) single-sideband purity - that's just which
 	// physical sideband carries the tone (an I/Q sign/labeling
 	// convention, harmless), not a defect. Tried flipping this to 0:
-	// image rejection got markedly WORSE (both sidebands comparable
-	// strength instead of one dominant), so keep the original value.
-	.pp_tx_swap_enable = 1,
+	// PP_TX_SWAP_IQ. With this =1, the DDS tone consistently landed on
+	// the LOWER/inverted sideband (TX_LO - f_dds instead of TX_LO +
+	// f_dds - confirmed on hardware, e.g. LO=500MHz + DDS=2MHz showing
+	// up at 498MHz instead of 502MHz). First tried flipping this to 0
+	// before tx_fb_clock_delay/tx_data_delay below were fixed (they
+	// were scrambling data bit-exactly, confirmed via digital
+	// loopback) and image rejection got worse then - but with that
+	// real bug now fixed, =0 correctly gives the upper/expected
+	// sideband AND keeps good SNR (40-59dB) and image rejection
+	// (35-40dB) across 300kHz-2.2MHz. Keep 0.
+	.pp_tx_swap_enable = 0,
 	.pp_rx_swap_enable = 1,
 	.tx_channel_swap_enable = 0,
 	.rx_channel_swap_enable = 0,

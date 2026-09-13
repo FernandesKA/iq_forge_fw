@@ -97,8 +97,6 @@ static std::optional<std::uint64_t> parse_u64(const std::string &s) {
     return static_cast<std::uint64_t>(v);
 }
 
-// Reads one line from stdin. nullopt means EOF (e.g. ssh running this
-// non-interactively, or the user hit ctrl-D) - callers treat that as "leave".
 static std::optional<std::string> read_line(const char *prompt) {
     if (prompt) {
         std::fputs(prompt, stdout);
@@ -111,7 +109,6 @@ static std::optional<std::string> read_line(const char *prompt) {
     return line;
 }
 
-// Prompts until a number in [min, max] is entered. nullopt on EOF.
 static std::optional<long> read_choice(const char *prompt, long min, long max) {
     for (;;) {
         auto line = read_line(prompt);
@@ -156,9 +153,6 @@ static std::optional<double> read_double(const char *prompt) {
     return v;
 }
 
-// Sub-menus. Each returns nullopt on "0) back" or EOF - callers just abandon
-// the action in that case rather than distinguishing the two.
-
 static std::optional<drivers::rx_gain_mode> select_agc_mode() {
     std::printf("\n 1) manual\n 2) fast attack agc\n 3) slow attack agc\n 4) hybrid agc\n 0) back\n");
     auto choice = read_choice("> ", 0, 4);
@@ -182,10 +176,6 @@ static std::optional<bool> select_on_off() {
     return *choice == 1;
 }
 
-// Single-keypress raw terminal mode for the delay tuner below - no Enter
-// needed between +/-/s/q. ISIG stays on so Ctrl-C still works; a SIGINT
-// handler restores the terminal before the process dies so an interrupted
-// tuning session doesn't leave the SSH session's tty stuck echo-less.
 static struct termios g_orig_termios;
 static bool g_raw_mode_active = false;
 
@@ -221,7 +211,6 @@ static bool enable_raw_mode() {
     return true;
 }
 
-// Blocks for one keypress, no Enter required. Returns -1 on EOF/read error.
 static int read_key() {
     unsigned char c = 0;
     if (::read(STDIN_FILENO, &c, 1) != 1) {
@@ -230,10 +219,6 @@ static int read_key() {
     return c;
 }
 
-// Live +/- tuning of one 0-15 field of REG_TX_CLOCK_DATA_DELAY, writing to
-// hardware on every keypress so the effect (spectrum, ILA, whatever the
-// user is watching) shows up immediately. 's' keeps the current value and
-// returns; 'q'/Esc reverts to whatever the register held on entry.
 static void tune_tx_clock_data_delay_field(project::iq_forge &forge, const char *field_name, bool tune_fb_clk) {
     std::uint8_t fb = 0, td = 0;
     if (!forge.get_ad9361_tx_clock_data_delay(fb, td)) {
@@ -287,11 +272,6 @@ static void tune_tx_clock_data_delay_field(project::iq_forge &forge, const char 
     }
 }
 
-// Live bit-toggle tuning of one LVDS invert control register (ctrl1 =
-// REG_LVDS_INVERT_CTRL1, TX_FRAME/TX_D[5:0]; ctrl2 = REG_LVDS_INVERT_CTRL2,
-// RX-side/clock bits). Each digit key 0-7 toggles that bit and writes
-// immediately. 's' keeps the current value; 'q'/Esc reverts to whatever the
-// register held on entry.
 static void tune_lvds_invert_field(project::iq_forge &forge, const char *field_name, bool tune_ctrl1) {
     std::uint8_t c1 = 0, c2 = 0;
     if (!forge.get_ad9361_lvds_invert(c1, c2)) {
@@ -653,10 +633,6 @@ static void run_menu(project::iq_forge &forge) {
                     std::printf("invalid or cancelled\n");
                     break;
                 }
-                // mask=0: BIST_MASK_CHANNEL_x bits *exclude* a channel from
-                // injection, not include it - 0 masks nothing, so the tone
-                // goes out on all channels (only TX1 is wired up here
-                // anyway). level_db=0: full scale.
                 if (forge.set_ad9361_bist_tone(drivers::bist_mode::inject_tx, static_cast<std::uint32_t>(*hz), 0,
                                                 0x0)) {
                     std::printf("bist-tone: enabled at %llu Hz on TX1 (item 22 to disable)\n",

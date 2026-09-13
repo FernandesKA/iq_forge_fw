@@ -64,12 +64,6 @@ namespace drivers {
             return false;
         }
 
-        // ad9361_set_tx_lo_freq() only retunes the synthesizer - without a
-        // fresh TX_QUAD_CAL the quad/LO-leakage correction stays calibrated
-        // for whatever frequency was active at init(), and LO leakage
-        // dominates the TX spectrum at the new frequency. A failure here
-        // isn't fatal to the frequency change itself, but is surfaced via
-        // error_code() so callers can at least log it.
         return calibrate_tx_quadrature();
     }
 
