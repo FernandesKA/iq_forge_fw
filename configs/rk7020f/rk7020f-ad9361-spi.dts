@@ -28,13 +28,28 @@
  *
  * Requires the target's base devicetree (zynq-rk7020f-iqforge.dtb) to
  * carry &spi0 with status = "okay" - already the case, see
- * buildroot_custom board/zynq/RK-ZYNQ7020-F-IQFORGE/dts.
+ * buildroot_custom board/zynq/RK-ZYNQ7020-F-IQFORGE/dts. This overlay
+ * also sets status = "okay" on &spi0 itself, defensively.
+ *
+ * Also requires the KERNEL to have the PS7 SPI controller driver
+ * built in: &spi0/&spi1 are compatible = "xlnx,zynq-spi-r1p6"
+ * (zynq-7000.dtsi), matched by drivers/spi/spi-cadence.c /
+ * CONFIG_SPI_CADENCE - NOT CONFIG_SPI_XILINX (that one's for the AXI
+ * Quad SPI *PL fabric* IP core, a different piece of hardware we don't
+ * have). Without CONFIG_SPI_CADENCE there's no spi_master bound to
+ * spi0 at all, so this overlay's ad9361@0 child node can apply cleanly
+ * (device tree merge succeeds) and STILL never produce a
+ * /dev/spidevX.0 - confirmed on hardware: RK-ZYNQ7020-F-IQFORGE's
+ * linux-config.fragment only had CONFIG_SPI_SPIDEV (the spidev *child*
+ * driver) missing CONFIG_SPI_CADENCE (the *controller* driver) - see
+ * buildroot_custom board/zynq/RK-ZYNQ7020-F-IQFORGE/linux-config.fragment.
  */
 
 /dts-v1/;
 /plugin/;
 
 &spi0 {
+	status = "okay";
 	#address-cells = <1>;
 	#size-cells = <0>;
 
