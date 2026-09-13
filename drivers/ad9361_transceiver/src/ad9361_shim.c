@@ -123,3 +123,53 @@ int32_t ad9361_transceiver_shim_get_ensm_state(void *phy, uint8_t *state)
 	*state = ad9361_ensm_get_state((struct ad9361_rf_phy *)phy);
 	return 0;
 }
+
+/* Also declared in ad9361.h only - see the comment on
+ * ad9361_set_tx_clock_data_delay in ad9361.c for why these exist. */
+extern int32_t ad9361_set_tx_clock_data_delay(struct ad9361_rf_phy *phy,
+					       uint8_t fb_clk_delay, uint8_t tx_data_delay);
+extern int32_t ad9361_get_tx_clock_data_delay(struct ad9361_rf_phy *phy,
+					       uint8_t *fb_clk_delay, uint8_t *tx_data_delay);
+
+int32_t ad9361_transceiver_shim_set_tx_clock_data_delay(void *phy, uint8_t fb_clk_delay, uint8_t tx_data_delay)
+{
+	return ad9361_set_tx_clock_data_delay((struct ad9361_rf_phy *)phy, fb_clk_delay, tx_data_delay);
+}
+
+int32_t ad9361_transceiver_shim_get_tx_clock_data_delay(void *phy, uint8_t *fb_clk_delay, uint8_t *tx_data_delay)
+{
+	return ad9361_get_tx_clock_data_delay((struct ad9361_rf_phy *)phy, fb_clk_delay, tx_data_delay);
+}
+
+/* TX_QUAD_CAL = (1 << 4) - defined in ad9361.h (not the public ad9361_api.h,
+ * which is what's included here), see the switch in ad9361_do_calib_run(). */
+#define AD9361_SHIM_TX_QUAD_CAL (1 << 4)
+
+int32_t ad9361_transceiver_shim_calibrate_tx_quad(void *phy)
+{
+	return ad9361_do_calib((struct ad9361_rf_phy *)phy, AD9361_SHIM_TX_QUAD_CAL, -1);
+}
+
+int32_t ad9361_transceiver_shim_set_tx_sampling_freq(void *phy, uint32_t sampling_freq_hz)
+{
+	return ad9361_set_tx_sampling_freq((struct ad9361_rf_phy *)phy, sampling_freq_hz);
+}
+
+int32_t ad9361_transceiver_shim_get_tx_sampling_freq(void *phy, uint32_t *sampling_freq_hz)
+{
+	return ad9361_get_tx_sampling_freq((struct ad9361_rf_phy *)phy, sampling_freq_hz);
+}
+
+/* Also declared in ad9361.h only. */
+extern int32_t ad9361_set_lvds_invert(struct ad9361_rf_phy *phy, uint8_t ctrl1, uint8_t ctrl2);
+extern int32_t ad9361_get_lvds_invert(struct ad9361_rf_phy *phy, uint8_t *ctrl1, uint8_t *ctrl2);
+
+int32_t ad9361_transceiver_shim_set_lvds_invert(void *phy, uint8_t ctrl1, uint8_t ctrl2)
+{
+	return ad9361_set_lvds_invert((struct ad9361_rf_phy *)phy, ctrl1, ctrl2);
+}
+
+int32_t ad9361_transceiver_shim_get_lvds_invert(void *phy, uint8_t *ctrl1, uint8_t *ctrl2)
+{
+	return ad9361_get_lvds_invert((struct ad9361_rf_phy *)phy, ctrl1, ctrl2);
+}

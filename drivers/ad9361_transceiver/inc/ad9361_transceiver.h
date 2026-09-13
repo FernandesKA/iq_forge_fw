@@ -77,6 +77,44 @@ namespace drivers {
             bool disable_tx();
             bool get_ensm_state(ensm_state &state);
 
+            // Manual TX digital-interface delay tuning (REG_TX_CLOCK_DATA_DELAY).
+            // ad9361_dig_tune()/ad9361_hdl_loopback() are stubbed out on this
+            // bare-metal port (no AXI-ADC/DMA BIST loopback core to run them
+            // through), so the TX LVDS sampling point is never auto-calibrated -
+            // these are for manually sweeping fb_clk_delay/tx_data_delay
+            // (0-15 each) until the FPGA-side TX_D/TX_FRAME timing is sampled
+            // correctly by the chip.
+            bool set_tx_clock_data_delay(std::uint8_t fb_clk_delay, std::uint8_t tx_data_delay);
+            bool get_tx_clock_data_delay(std::uint8_t &fb_clk_delay, std::uint8_t &tx_data_delay);
+
+            // Forces a TX quadrature/LO-leakage recalibration (TX_QUAD_CAL)
+            // at the currently-set TX LO. set_tx_lo_frequency() calls this
+            // automatically after retuning - ad9361_set_tx_lo_freq() only
+            // moves the synthesizer, it does NOT recalibrate, so without
+            // this the quad/LOL correction stays calibrated for whatever
+            // frequency was active at init() and LO leakage dominates the
+            // spectrum at any other frequency (~40 dB above a DDS tone,
+            // confirmed on hardware). Exposed standalone too, for
+            // recalibrating without a frequency change (e.g. after an
+            // attenuation change).
+            bool calibrate_tx_quadrature();
+
+            // Reconfigures the whole RX/TX digital clock chain (BBPLL, ADC/
+            // DAC, HB filters, TX_SAMPL_FREQ/RX_SAMPL_FREQ) for hz. The
+            // default init params hardcode a 30.72 MSPS ADI reference-design
+            // rate that has nothing to do with dds_tx_chain's actual output
+            // rate (dds_clk_hz/2) - without this call AD9361 samples the
+            // LVDS port at the wrong rate and TX data comes out incoherent.
+            bool set_tx_sample_rate(std::uint32_t hz);
+            bool get_tx_sample_rate(std::uint32_t &hz);
+
+            // Raw REG_LVDS_INVERT_CTRL1/2 (TX_FRAME/TX_D[5:0] and RX-side/
+            // clock invert bits). The default masks are an unvalidated
+            // copy from some other reference design's board - for
+            // sweeping bit-by-bit against a known-good signal.
+            bool set_lvds_invert(std::uint8_t ctrl1, std::uint8_t ctrl2);
+            bool get_lvds_invert(std::uint8_t &ctrl1, std::uint8_t &ctrl2);
+
             bool is_initialized() const noexcept;
 
             std::int32_t error_code() const noexcept;

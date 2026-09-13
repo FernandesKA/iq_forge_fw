@@ -7675,6 +7675,79 @@ int32_t ad9361_write_clock_data_delays(struct ad9361_rf_phy *phy)
 }
 
 /**
+ * Set the LVDS invert control registers (REG_LVDS_INVERT_CTRL1/2) directly,
+ * bypassing the normal path (ad9361_setup() only writes these once, at
+ * init, from pd->port_ctrl.lvds_invert[] - see ad9361_default_init_param's
+ * lvds_invert1_control=0xFF/lvds_invert2_control=0x0F, copied from some
+ * other reference design and never validated against this board's actual
+ * LVDS trace polarity). For sweeping bit-by-bit against a known-good signal.
+ * @param phy   The AD9361 state structure.
+ * @param ctrl1 Raw REG_LVDS_INVERT_CTRL1 value (TX_FRAME/TX_D[5:0] invert bits).
+ * @param ctrl2 Raw REG_LVDS_INVERT_CTRL2 value (RX side + clock invert bits).
+ * @return 0 on success, negative error code otherwise.
+ */
+int32_t ad9361_set_lvds_invert(struct ad9361_rf_phy *phy, uint8_t ctrl1, uint8_t ctrl2)
+{
+	phy->pdata->port_ctrl.lvds_invert[0] = ctrl1;
+	phy->pdata->port_ctrl.lvds_invert[1] = ctrl2;
+	ad9361_spi_write(phy->spi, REG_LVDS_INVERT_CTRL1, ctrl1);
+	ad9361_spi_write(phy->spi, REG_LVDS_INVERT_CTRL2, ctrl2);
+	return 0;
+}
+
+/**
+ * Read the LVDS invert control registers back from hardware.
+ * @param phy   The AD9361 state structure.
+ * @param ctrl1 Output: REG_LVDS_INVERT_CTRL1.
+ * @param ctrl2 Output: REG_LVDS_INVERT_CTRL2.
+ * @return 0 on success, negative error code otherwise.
+ */
+int32_t ad9361_get_lvds_invert(struct ad9361_rf_phy *phy, uint8_t *ctrl1, uint8_t *ctrl2)
+{
+	*ctrl1 = (uint8_t)ad9361_spi_read(phy->spi, REG_LVDS_INVERT_CTRL1);
+	*ctrl2 = (uint8_t)ad9361_spi_read(phy->spi, REG_LVDS_INVERT_CTRL2);
+	return 0;
+}
+
+/**
+ * Set and write the TX clock/data delay register (REG_TX_CLOCK_DATA_DELAY).
+ * ad9361_dig_tune()/ad9361_hdl_loopback() are stubbed out on this bare-metal
+ * port (no AXI-ADC/DMA BIST loopback core to run them through), so the
+ * digital TX interface is never auto-calibrated - this is for manually
+ * sweeping fb_clk_delay/tx_data_delay (0-15 each) against a known-good
+ * signal until the FPGA-side TX_D/TX_FRAME LVDS timing is sampled correctly.
+ * @param phy           The AD9361 state structure.
+ * @param fb_clk_delay  FB_CLK_DELAY<3:0> (0-15).
+ * @param tx_data_delay TX_DATA_DELAY<3:0> (0-15).
+ * @return 0 on success, negative error code otherwise.
+ */
+int32_t ad9361_set_tx_clock_data_delay(struct ad9361_rf_phy *phy,
+				       uint8_t fb_clk_delay, uint8_t tx_data_delay)
+{
+	phy->pdata->port_ctrl.tx_clk_data_delay =
+		((fb_clk_delay & 0xF) << 4) | (tx_data_delay & 0xF);
+	return ad9361_write_clock_data_delays(phy);
+}
+
+/**
+ * Re-read the TX clock/data delay register from hardware and unpack it.
+ * @param phy           The AD9361 state structure.
+ * @param fb_clk_delay  Output: FB_CLK_DELAY<3:0>.
+ * @param tx_data_delay Output: TX_DATA_DELAY<3:0>.
+ * @return 0 on success, negative error code otherwise.
+ */
+int32_t ad9361_get_tx_clock_data_delay(struct ad9361_rf_phy *phy,
+				       uint8_t *fb_clk_delay, uint8_t *tx_data_delay)
+{
+	int32_t ret = ad9361_read_clock_data_delays(phy);
+	if (ret < 0)
+		return ret;
+	*fb_clk_delay = (phy->pdata->port_ctrl.tx_clk_data_delay >> 4) & 0xF;
+	*tx_data_delay = phy->pdata->port_ctrl.tx_clk_data_delay & 0xF;
+	return 0;
+}
+
+/**
  * Return the current digital interface tuning state.
  * @param phy  The AD9361 state structure.
  * @param data Output: populated with skip_mode and current delay register values.

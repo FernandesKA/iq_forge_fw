@@ -17,7 +17,17 @@ const AD9361_InitParam ad9361_default_init_param = {
 	/* Reference Clock */
 	.reference_clk_rate = 40000000UL,
 	/* Base Configuration */
-	.two_rx_two_tx_mode_enable = 1,
+	// The FPGA-side LVDS interface (ad9361_tx_lvds.sv) only ever sends
+	// one channel's I/Q per TX_FRAME period (no second-channel
+	// timeslot) - i.e. it's built for 1T1R framing. With rx2tx2=1
+	// (2T2R), ad9361_validate_trx_clock_chain()'s data_clk formula
+	// doubles the digital-port bit rate the AD9361 expects
+	// (data_clk = (rx2tx2?4:2)/(LVDS_MODE?1:2) * RX_SAMPL_FREQ) - the
+	// chip would interpret our single-channel bitstream as interleaved
+	// Tx1/Tx2 data, scrambling every sample regardless of any LVDS
+	// clock/data delay tuning. one_rx_one_tx_mode_use_tx_num below was
+	// already set to 1 (TX1), showing single-channel was the intent.
+	.two_rx_two_tx_mode_enable = 0,
 	.one_rx_one_tx_mode_use_rx_num = 1,
 	.one_rx_one_tx_mode_use_tx_num = 1,
 	.frequency_division_duplex_mode_enable = 1,
@@ -175,6 +185,13 @@ const AD9361_InitParam ad9361_default_init_param = {
 	/* Digital Interface Control */
 	.digital_interface_tune_skip_mode = 0,
 	.digital_interface_tune_fir_disable = 0,
+	// With pp_tx_swap_enable=1, the DDS tone consistently lands on the
+	// lower sideband ((TX_LO-RX_LO)-f_dds instead of +f_dds) with good
+	// (~40-49dB SNR) single-sideband purity - that's just which
+	// physical sideband carries the tone (an I/Q sign/labeling
+	// convention, harmless), not a defect. Tried flipping this to 0:
+	// image rejection got markedly WORSE (both sidebands comparable
+	// strength instead of one dominant), so keep the original value.
 	.pp_tx_swap_enable = 1,
 	.pp_rx_swap_enable = 1,
 	.tx_channel_swap_enable = 0,

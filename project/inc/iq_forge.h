@@ -58,11 +58,22 @@ namespace project {
             bool bring_up_ad9361() const;
             const std::string &ad9361_ctrl_gpio_error() const;
 
+            // Also reconfigures AD9361's TX (and RX) sample rate to
+            // dds_clk_hz/2 if dds_clk_hz was supplied - see
+            // ad9361_transceiver::set_tx_sample_rate for why (the default
+            // init params hardcode an unrelated 30.72 MSPS ADI reference
+            // rate). No-op for that step if dds_clk_hz wasn't supplied.
             bool init_ad9361_transceiver();
             std::int32_t ad9361_transceiver_error_code() const;
 
             bool ad9361_transceiver_ready() const;
 
+            // Retunes the TX LO and recalibrates TX quadrature/LO-leakage
+            // for it (see ad9361_transceiver::set_tx_lo_frequency). Mutes
+            // the DDS for the duration if it was enabled - the calibration
+            // needs a quiet baseband, and the DDS enable bit survives
+            // AD9361 reinit so it can easily be left on from a previous
+            // run - then restores it.
             bool set_ad9361_tx_lo_frequency(std::uint64_t hz);
             bool get_ad9361_tx_lo_frequency(std::uint64_t &hz);
 
@@ -77,6 +88,26 @@ namespace project {
             // Live readback of the chip's ENSM state (what it's actually
             // doing right now), not just what was last commanded.
             bool get_ad9361_ensm_state(drivers::ensm_state &state);
+
+            // Manual TX digital-interface delay tuning (REG_TX_CLOCK_DATA_DELAY,
+            // fb_clk_delay/tx_data_delay 0-15 each) - see
+            // drivers::ad9361_transceiver::set_tx_clock_data_delay for why
+            // this exists (dig_tune()/hdl_loopback() are stubbed out on this
+            // bare-metal port, so the TX LVDS sampling point is never
+            // auto-calibrated; sweep these by hand against a known signal).
+            bool set_ad9361_tx_clock_data_delay(std::uint8_t fb_clk_delay, std::uint8_t tx_data_delay);
+            bool get_ad9361_tx_clock_data_delay(std::uint8_t &fb_clk_delay, std::uint8_t &tx_data_delay);
+
+            // Forces a TX quadrature/LO-leakage recalibration at the
+            // current TX LO. set_ad9361_tx_lo_frequency() already calls
+            // this automatically - exposed standalone for recalibrating
+            // without a frequency change (e.g. after an attenuation change).
+            bool calibrate_ad9361_tx_quadrature();
+
+            // Raw REG_LVDS_INVERT_CTRL1/2 (TX_FRAME/TX_D[5:0] and RX-side/
+            // clock invert bits) - see ad9361_transceiver::set_lvds_invert.
+            bool set_ad9361_lvds_invert(std::uint8_t ctrl1, std::uint8_t ctrl2);
+            bool get_ad9361_lvds_invert(std::uint8_t &ctrl1, std::uint8_t &ctrl2);
 
             // Enables/disables the DDS TX chain's sine output via
             // axi_gpio_dds_ctrl (see

@@ -11,6 +11,8 @@
 
 #include "iq_forge.h"
 
+#include <cstdio>
+
 namespace project {
 
     iq_forge::iq_forge(const hal::spi_config &ad9361_spi_config, std::optional<std::uintptr_t> ad9361_ctrl_gpio_base,
@@ -67,7 +69,29 @@ namespace project {
     }
 
     bool iq_forge::init_ad9361_transceiver() {
-        return m_ad9361_transceiver.init();
+        if (!m_ad9361_transceiver.init()) {
+            return false;
+        }
+
+        // ad9361_default_init_param hardcodes TX_SAMPL_FREQ=30.72 MSPS (an
+        // ADI reference-design default) - dds_tx_chain actually delivers
+        // samples at dds_clk_hz/2 (see ad9361_transceiver::set_tx_sample_rate).
+        // Best-effort: no dds_clk_hz means no DDS on this board (or an
+        // fw_config without it), nothing to correct.
+        if (m_dds_clk_hz) {
+            std::uint32_t rate = static_cast<std::uint32_t>(*m_dds_clk_hz / 2.0);
+            if (!m_ad9361_transceiver.set_tx_sample_rate(rate)) {
+                std::fprintf(stderr, "warning: set_tx_sample_rate(%u) failed (%d)\n", rate,
+                            m_ad9361_transceiver.error_code());
+            } else {
+                std::uint32_t readback = 0;
+                if (m_ad9361_transceiver.get_tx_sample_rate(readback)) {
+                    std::fprintf(stderr, "debug: tx sample rate requested=%u readback=%u\n", rate, readback);
+                }
+            }
+        }
+
+        return true;
     }
 
     std::int32_t iq_forge::ad9361_transceiver_error_code() const {
@@ -79,7 +103,27 @@ namespace project {
     }
 
     bool iq_forge::set_ad9361_tx_lo_frequency(std::uint64_t hz) {
-        return m_ad9361_transceiver.set_tx_lo_frequency(hz);
+        // set_tx_lo_frequency() retunes the synth and then runs TX_QUAD_CAL
+        // (see ad9361_transceiver::set_tx_lo_frequency). That calibration
+        // needs a quiet TX baseband to measure against - if the DDS is
+        // still driving a tone through it (its FPGA-side enable bit
+        // survives across ad9361_init(), unlike anything on the AD9361
+        // itself), the calibration comes out ~30 dB worse (confirmed on
+        // hardware: residual LO leakage dropped from ~156 dB to ~125 dB
+        // just from muting the DDS first). Mute it for the retune+cal, then
+        // put it back the way it was.
+        std::optional<bool> was_enabled = dds_enabled();
+        if (was_enabled && *was_enabled) {
+            set_dds_enabled(false);
+        }
+
+        bool ok = m_ad9361_transceiver.set_tx_lo_frequency(hz);
+
+        if (was_enabled && *was_enabled) {
+            set_dds_enabled(true);
+        }
+
+        return ok;
     }
 
     bool iq_forge::get_ad9361_tx_lo_frequency(std::uint64_t &hz) {
@@ -108,6 +152,26 @@ namespace project {
 
     bool iq_forge::get_ad9361_ensm_state(drivers::ensm_state &state) {
         return m_ad9361_transceiver.get_ensm_state(state);
+    }
+
+    bool iq_forge::set_ad9361_tx_clock_data_delay(std::uint8_t fb_clk_delay, std::uint8_t tx_data_delay) {
+        return m_ad9361_transceiver.set_tx_clock_data_delay(fb_clk_delay, tx_data_delay);
+    }
+
+    bool iq_forge::get_ad9361_tx_clock_data_delay(std::uint8_t &fb_clk_delay, std::uint8_t &tx_data_delay) {
+        return m_ad9361_transceiver.get_tx_clock_data_delay(fb_clk_delay, tx_data_delay);
+    }
+
+    bool iq_forge::calibrate_ad9361_tx_quadrature() {
+        return m_ad9361_transceiver.calibrate_tx_quadrature();
+    }
+
+    bool iq_forge::set_ad9361_lvds_invert(std::uint8_t ctrl1, std::uint8_t ctrl2) {
+        return m_ad9361_transceiver.set_lvds_invert(ctrl1, ctrl2);
+    }
+
+    bool iq_forge::get_ad9361_lvds_invert(std::uint8_t &ctrl1, std::uint8_t &ctrl2) {
+        return m_ad9361_transceiver.get_lvds_invert(ctrl1, ctrl2);
     }
 
     bool iq_forge::set_dds_enabled(bool enabled) const {

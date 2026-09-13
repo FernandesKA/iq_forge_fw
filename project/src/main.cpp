@@ -28,6 +28,10 @@
 #include <optional>
 #include <string>
 
+#include <csignal>
+#include <termios.h>
+#include <unistd.h>
+
 static void usage(const char *prog) {
     std::fprintf(stderr,
         "Usage: %s [--help]\n"
@@ -178,6 +182,222 @@ static std::optional<bool> select_on_off() {
     return *choice == 1;
 }
 
+// Single-keypress raw terminal mode for the delay tuner below - no Enter
+// needed between +/-/s/q. ISIG stays on so Ctrl-C still works; a SIGINT
+// handler restores the terminal before the process dies so an interrupted
+// tuning session doesn't leave the SSH session's tty stuck echo-less.
+static struct termios g_orig_termios;
+static bool g_raw_mode_active = false;
+
+static void disable_raw_mode() {
+    if (g_raw_mode_active) {
+        tcsetattr(STDIN_FILENO, TCSANOW, &g_orig_termios);
+        g_raw_mode_active = false;
+    }
+}
+
+static void handle_sigint_in_raw_mode(int sig) {
+    disable_raw_mode();
+    std::signal(sig, SIG_DFL);
+    std::raise(sig);
+}
+
+static bool enable_raw_mode() {
+    if (!isatty(STDIN_FILENO)) {
+        return false;
+    }
+    if (tcgetattr(STDIN_FILENO, &g_orig_termios) != 0) {
+        return false;
+    }
+    struct termios raw = g_orig_termios;
+    raw.c_lflag &= static_cast<tcflag_t>(~(ICANON | ECHO));
+    raw.c_cc[VMIN] = 1;
+    raw.c_cc[VTIME] = 0;
+    if (tcsetattr(STDIN_FILENO, TCSANOW, &raw) != 0) {
+        return false;
+    }
+    g_raw_mode_active = true;
+    std::signal(SIGINT, handle_sigint_in_raw_mode);
+    return true;
+}
+
+// Blocks for one keypress, no Enter required. Returns -1 on EOF/read error.
+static int read_key() {
+    unsigned char c = 0;
+    if (::read(STDIN_FILENO, &c, 1) != 1) {
+        return -1;
+    }
+    return c;
+}
+
+// Live +/- tuning of one 0-15 field of REG_TX_CLOCK_DATA_DELAY, writing to
+// hardware on every keypress so the effect (spectrum, ILA, whatever the
+// user is watching) shows up immediately. 's' keeps the current value and
+// returns; 'q'/Esc reverts to whatever the register held on entry.
+static void tune_tx_clock_data_delay_field(project::iq_forge &forge, const char *field_name, bool tune_fb_clk) {
+    std::uint8_t fb = 0, td = 0;
+    if (!forge.get_ad9361_tx_clock_data_delay(fb, td)) {
+        std::printf("error: get tx clock/data delay failed (%d)\n", forge.ad9361_transceiver_error_code());
+        return;
+    }
+
+    const std::uint8_t original = tune_fb_clk ? fb : td;
+    std::uint8_t value = original;
+
+    auto apply = [&](std::uint8_t v) {
+        std::uint8_t new_fb = tune_fb_clk ? v : fb;
+        std::uint8_t new_td = tune_fb_clk ? td : v;
+        if (!forge.set_ad9361_tx_clock_data_delay(new_fb, new_td)) {
+            std::printf("error: write failed (%d)\n", forge.ad9361_transceiver_error_code());
+            return false;
+        }
+        fb = new_fb;
+        td = new_td;
+        return true;
+    };
+
+    std::printf("\ntuning %s (0-15). [+] up  [-] down  [s] save & back  [q] cancel & back\n", field_name);
+    std::printf("%s=%u\n", field_name, value);
+
+    for (;;) {
+        int c = read_key();
+        if (c < 0) {
+            break;
+        }
+        if ((c == '+' || c == '=') && value < 15) {
+            std::uint8_t next = static_cast<std::uint8_t>(value + 1);
+            if (apply(next)) {
+                value = next;
+                std::printf("%s=%u\n", field_name, value);
+            }
+        } else if ((c == '-' || c == '_') && value > 0) {
+            std::uint8_t next = static_cast<std::uint8_t>(value - 1);
+            if (apply(next)) {
+                value = next;
+                std::printf("%s=%u\n", field_name, value);
+            }
+        } else if (c == 's' || c == 'S') {
+            std::printf("saved: %s=%u\n", field_name, value);
+            return;
+        } else if (c == 'q' || c == 'Q' || c == 27) {
+            apply(original);
+            std::printf("cancelled: %s reverted to %u\n", field_name, original);
+            return;
+        }
+    }
+}
+
+// Live bit-toggle tuning of one LVDS invert control register (ctrl1 =
+// REG_LVDS_INVERT_CTRL1, TX_FRAME/TX_D[5:0]; ctrl2 = REG_LVDS_INVERT_CTRL2,
+// RX-side/clock bits). Each digit key 0-7 toggles that bit and writes
+// immediately. 's' keeps the current value; 'q'/Esc reverts to whatever the
+// register held on entry.
+static void tune_lvds_invert_field(project::iq_forge &forge, const char *field_name, bool tune_ctrl1) {
+    std::uint8_t c1 = 0, c2 = 0;
+    if (!forge.get_ad9361_lvds_invert(c1, c2)) {
+        std::printf("error: get lvds invert failed (%d)\n", forge.ad9361_transceiver_error_code());
+        return;
+    }
+
+    const std::uint8_t original = tune_ctrl1 ? c1 : c2;
+    std::uint8_t value = original;
+
+    auto apply = [&](std::uint8_t v) {
+        std::uint8_t new_c1 = tune_ctrl1 ? v : c1;
+        std::uint8_t new_c2 = tune_ctrl1 ? c2 : v;
+        if (!forge.set_ad9361_lvds_invert(new_c1, new_c2)) {
+            std::printf("error: write failed (%d)\n", forge.ad9361_transceiver_error_code());
+            return false;
+        }
+        c1 = new_c1;
+        c2 = new_c2;
+        return true;
+    };
+
+    std::printf("\ntuning %s (8 bits). [0-7] toggle bit  [s] save & back  [q] cancel & back\n", field_name);
+    std::printf("%s=0x%02X\n", field_name, value);
+
+    for (;;) {
+        int c = read_key();
+        if (c < 0) {
+            break;
+        }
+        if (c >= '0' && c <= '7') {
+            std::uint8_t bit = static_cast<std::uint8_t>(1u << (c - '0'));
+            std::uint8_t next = static_cast<std::uint8_t>(value ^ bit);
+            if (apply(next)) {
+                value = next;
+                std::printf("%s=0x%02X\n", field_name, value);
+            }
+        } else if (c == 's' || c == 'S') {
+            std::printf("saved: %s=0x%02X\n", field_name, value);
+            return;
+        } else if (c == 'q' || c == 'Q' || c == 27) {
+            apply(original);
+            std::printf("cancelled: %s reverted to 0x%02X\n", field_name, original);
+            return;
+        }
+    }
+}
+
+static void run_lvds_invert_tuner(project::iq_forge &forge) {
+    if (!enable_raw_mode()) {
+        std::printf("error: interactive tuner needs a real tty (run over 'ssh -t ...', not a piped/non-interactive session)\n");
+        return;
+    }
+
+    for (;;) {
+        std::uint8_t c1 = 0, c2 = 0;
+        bool have = forge.get_ad9361_lvds_invert(c1, c2);
+        std::printf("\nLVDS invert tuner");
+        if (have) {
+            std::printf(" (current: ctrl1=0x%02X ctrl2=0x%02X)", c1, c2);
+        }
+        std::printf("\n [1] tune ctrl1 (TX_FRAME/TX_D[5:0])   [2] tune ctrl2 (RX-side/clock)   [q] back\n");
+
+        int c = read_key();
+        if (c < 0 || c == 'q' || c == 'Q' || c == 27 || c == '0') {
+            break;
+        }
+        if (c == '1') {
+            tune_lvds_invert_field(forge, "ctrl1", true);
+        } else if (c == '2') {
+            tune_lvds_invert_field(forge, "ctrl2", false);
+        }
+    }
+
+    disable_raw_mode();
+}
+
+static void run_tx_clock_data_delay_tuner(project::iq_forge &forge) {
+    if (!enable_raw_mode()) {
+        std::printf("error: interactive tuner needs a real tty (run over 'ssh -t ...', not a piped/non-interactive session)\n");
+        return;
+    }
+
+    for (;;) {
+        std::uint8_t fb = 0, td = 0;
+        bool have = forge.get_ad9361_tx_clock_data_delay(fb, td);
+        std::printf("\nTX clock/data delay tuner");
+        if (have) {
+            std::printf(" (current: fb_clk_delay=%u tx_data_delay=%u)", fb, td);
+        }
+        std::printf("\n [1] tune FB_CLK_DELAY   [2] tune TX_DATA_DELAY   [q] back\n");
+
+        int c = read_key();
+        if (c < 0 || c == 'q' || c == 'Q' || c == 27 || c == '0') {
+            break;
+        }
+        if (c == '1') {
+            tune_tx_clock_data_delay_field(forge, "fb_clk_delay", true);
+        } else if (c == '2') {
+            tune_tx_clock_data_delay_field(forge, "tx_data_delay", false);
+        }
+    }
+
+    disable_raw_mode();
+}
+
 static void print_menu() {
     std::printf(
         "\n"
@@ -194,13 +414,20 @@ static void print_menu() {
         "10) DDS frequency - read (phase increment / FTW)\n"
         "11) DDS frequency - set (phase increment / FTW)\n"
         "12) DDS reset\n"
+        "13) TX clock/data delay - read (FB_CLK_DELAY / TX_DATA_DELAY)\n"
+        "14) TX clock/data delay - set (FB_CLK_DELAY / TX_DATA_DELAY)\n"
+        "15) TX clock/data delay - interactive tune (+/-, live)\n"
+        "16) TX quadrature/LO-leakage - recalibrate\n"
+        "17) LVDS invert - read (ctrl1/ctrl2)\n"
+        "18) LVDS invert - set (ctrl1/ctrl2, raw byte 0-255)\n"
+        "19) LVDS invert - interactive tune (bit toggle, live)\n"
         " 0) exit\n");
 }
 
 static void run_menu(project::iq_forge &forge) {
     for (;;) {
         print_menu();
-        auto choice = read_choice("> ", 0, 12);
+        auto choice = read_choice("> ", 0, 19);
         if (!choice || *choice == 0) {
             return;
         }
@@ -339,6 +566,79 @@ static void run_menu(project::iq_forge &forge) {
                 } else {
                     std::printf("error: %s\n", forge.dds_ctrl_gpio_error().c_str());
                 }
+                break;
+            }
+            case 13: {
+                std::uint8_t fb_clk_delay = 0, tx_data_delay = 0;
+                if (forge.get_ad9361_tx_clock_data_delay(fb_clk_delay, tx_data_delay)) {
+                    std::printf("tx-clock-data-delay: fb_clk_delay=%u tx_data_delay=%u\n", fb_clk_delay,
+                                tx_data_delay);
+                } else {
+                    std::printf("error: get tx clock/data delay failed (%d)\n", forge.ad9361_transceiver_error_code());
+                }
+                break;
+            }
+            case 14: {
+                auto fb_clk_delay = read_choice("Enter FB_CLK_DELAY (0-15): ", 0, 15);
+                if (!fb_clk_delay) {
+                    std::printf("invalid or cancelled\n");
+                    break;
+                }
+                auto tx_data_delay = read_choice("Enter TX_DATA_DELAY (0-15): ", 0, 15);
+                if (!tx_data_delay) {
+                    std::printf("invalid or cancelled\n");
+                    break;
+                }
+                if (forge.set_ad9361_tx_clock_data_delay(static_cast<std::uint8_t>(*fb_clk_delay),
+                                                          static_cast<std::uint8_t>(*tx_data_delay))) {
+                    std::printf("tx-clock-data-delay: fb_clk_delay=%ld tx_data_delay=%ld\n", *fb_clk_delay,
+                                *tx_data_delay);
+                } else {
+                    std::printf("error: set tx clock/data delay failed (%d)\n", forge.ad9361_transceiver_error_code());
+                }
+                break;
+            }
+            case 15: {
+                run_tx_clock_data_delay_tuner(forge);
+                break;
+            }
+            case 16: {
+                if (forge.calibrate_ad9361_tx_quadrature()) {
+                    std::printf("tx-quad-cal: done\n");
+                } else {
+                    std::printf("error: tx quad cal failed (%d)\n", forge.ad9361_transceiver_error_code());
+                }
+                break;
+            }
+            case 17: {
+                std::uint8_t c1 = 0, c2 = 0;
+                if (forge.get_ad9361_lvds_invert(c1, c2)) {
+                    std::printf("lvds-invert: ctrl1=0x%02X ctrl2=0x%02X\n", c1, c2);
+                } else {
+                    std::printf("error: get lvds invert failed (%d)\n", forge.ad9361_transceiver_error_code());
+                }
+                break;
+            }
+            case 18: {
+                auto c1 = read_choice("Enter ctrl1 (0-255): ", 0, 255);
+                if (!c1) {
+                    std::printf("invalid or cancelled\n");
+                    break;
+                }
+                auto c2 = read_choice("Enter ctrl2 (0-255): ", 0, 255);
+                if (!c2) {
+                    std::printf("invalid or cancelled\n");
+                    break;
+                }
+                if (forge.set_ad9361_lvds_invert(static_cast<std::uint8_t>(*c1), static_cast<std::uint8_t>(*c2))) {
+                    std::printf("lvds-invert: ctrl1=0x%02lX ctrl2=0x%02lX\n", *c1, *c2);
+                } else {
+                    std::printf("error: set lvds invert failed (%d)\n", forge.ad9361_transceiver_error_code());
+                }
+                break;
+            }
+            case 19: {
+                run_lvds_invert_tuner(forge);
                 break;
             }
             default:

@@ -3580,6 +3580,12 @@ int32_t ad9361_get_dig_tune_data(struct ad9361_rf_phy *phy,
 
 int32_t ad9361_write_clock_data_delays(struct ad9361_rf_phy *phy);
 int32_t ad9361_read_clock_data_delays(struct ad9361_rf_phy *phy);
+int32_t ad9361_set_tx_clock_data_delay(struct ad9361_rf_phy *phy,
+				       uint8_t fb_clk_delay, uint8_t tx_data_delay);
+int32_t ad9361_get_tx_clock_data_delay(struct ad9361_rf_phy *phy,
+				       uint8_t *fb_clk_delay, uint8_t *tx_data_delay);
+int32_t ad9361_set_lvds_invert(struct ad9361_rf_phy *phy, uint8_t ctrl1, uint8_t ctrl2);
+int32_t ad9361_get_lvds_invert(struct ad9361_rf_phy *phy, uint8_t *ctrl1, uint8_t *ctrl2);
 
 int32_t ad9361_write_bist_reg(struct ad9361_rf_phy *phy, uint32_t val);
 

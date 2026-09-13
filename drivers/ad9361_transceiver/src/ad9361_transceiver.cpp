@@ -63,7 +63,14 @@ namespace drivers {
             m_error_code = ret;
             return false;
         }
-        return true;
+
+        // ad9361_set_tx_lo_freq() only retunes the synthesizer - without a
+        // fresh TX_QUAD_CAL the quad/LO-leakage correction stays calibrated
+        // for whatever frequency was active at init(), and LO leakage
+        // dominates the TX spectrum at the new frequency. A failure here
+        // isn't fatal to the frequency change itself, but is surfaced via
+        // error_code() so callers can at least log it.
+        return calibrate_tx_quadrature();
     }
 
     bool ad9361_transceiver::get_tx_lo_frequency(std::uint64_t &hz) {
@@ -168,6 +175,97 @@ namespace drivers {
             return false;
         }
         state = static_cast<ensm_state>(raw);
+        return true;
+    }
+
+    bool ad9361_transceiver::set_tx_clock_data_delay(std::uint8_t fb_clk_delay, std::uint8_t tx_data_delay) {
+        if (!m_phy) {
+            return false;
+        }
+
+        std::int32_t ret = ad9361_transceiver_shim_set_tx_clock_data_delay(m_phy, fb_clk_delay, tx_data_delay);
+        if (ret < 0) {
+            m_error_code = ret;
+            return false;
+        }
+        return true;
+    }
+
+    bool ad9361_transceiver::get_tx_clock_data_delay(std::uint8_t &fb_clk_delay, std::uint8_t &tx_data_delay) {
+        if (!m_phy) {
+            return false;
+        }
+
+        std::int32_t ret = ad9361_transceiver_shim_get_tx_clock_data_delay(m_phy, &fb_clk_delay, &tx_data_delay);
+        if (ret < 0) {
+            m_error_code = ret;
+            return false;
+        }
+        return true;
+    }
+
+    bool ad9361_transceiver::calibrate_tx_quadrature() {
+        if (!m_phy) {
+            return false;
+        }
+
+        std::int32_t ret = ad9361_transceiver_shim_calibrate_tx_quad(m_phy);
+        if (ret < 0) {
+            m_error_code = ret;
+            return false;
+        }
+        return true;
+    }
+
+    bool ad9361_transceiver::set_tx_sample_rate(std::uint32_t hz) {
+        if (!m_phy) {
+            return false;
+        }
+
+        std::int32_t ret = ad9361_transceiver_shim_set_tx_sampling_freq(m_phy, hz);
+        if (ret < 0) {
+            m_error_code = ret;
+            return false;
+        }
+        return true;
+    }
+
+    bool ad9361_transceiver::get_tx_sample_rate(std::uint32_t &hz) {
+        if (!m_phy) {
+            return false;
+        }
+
+        std::int32_t ret = ad9361_transceiver_shim_get_tx_sampling_freq(m_phy, &hz);
+        if (ret < 0) {
+            m_error_code = ret;
+            return false;
+        }
+        return true;
+    }
+
+    bool ad9361_transceiver::set_lvds_invert(std::uint8_t ctrl1, std::uint8_t ctrl2) {
+        if (!m_phy) {
+            return false;
+        }
+
+        std::int32_t ret = ad9361_transceiver_shim_set_lvds_invert(m_phy, ctrl1, ctrl2);
+        if (ret < 0) {
+            m_error_code = ret;
+            return false;
+        }
+        return true;
+    }
+
+    bool ad9361_transceiver::get_lvds_invert(std::uint8_t &ctrl1, std::uint8_t &ctrl2) {
+        if (!m_phy) {
+            return false;
+        }
+
+        std::int32_t ret = ad9361_transceiver_shim_get_lvds_invert(m_phy, &ctrl1, &ctrl2);
+        if (ret < 0) {
+            m_error_code = ret;
+            return false;
+        }
         return true;
     }
 
