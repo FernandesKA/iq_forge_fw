@@ -193,7 +193,12 @@ namespace project {
         }
 
         constexpr double kAccScale = 16777216.0; // 2^24
-        std::uint32_t ftw = static_cast<std::uint32_t>(hz * kAccScale / *m_dds_clk_hz + 0.5);
+        // The phase accumulator only advances on i_ce = i_en & lvds_phase_sel,
+        // and lvds_phase_sel toggles every i_clk cycle (ad9361_tx_lvds.sv) -
+        // so it actually accumulates at dds_clk_hz/2, not dds_clk_hz. See
+        // regmap.md's f_out formula.
+        double sample_rate_hz = *m_dds_clk_hz / 2.0;
+        std::uint32_t ftw = static_cast<std::uint32_t>(hz * kAccScale / sample_rate_hz + 0.5);
         return set_dds_ftw(ftw);
     }
 
@@ -209,7 +214,8 @@ namespace project {
         }
 
         constexpr double kAccScale = 16777216.0; // 2^24
-        return *ftw * *m_dds_clk_hz / kAccScale;
+        double sample_rate_hz = *m_dds_clk_hz / 2.0;
+        return *ftw * sample_rate_hz / kAccScale;
     }
 
     const std::string &iq_forge::dds_ftw_gpio_error() const {

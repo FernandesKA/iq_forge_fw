@@ -102,7 +102,10 @@ namespace project {
             std::optional<std::uint32_t> get_dds_ftw() const;
 
             // Hz convenience on top of the FTW register: f_out = ftw *
-            // dds_clk_hz / 2^24. Requires both dds_ftw_gpio_base and
+            // (dds_clk_hz / 2) / 2^24 - the phase accumulator only advances
+            // on i_ce = i_en & lvds_phase_sel, which toggles every i_clk
+            // cycle (ad9361_tx_lvds.sv), so it accumulates at dds_clk_hz/2,
+            // not dds_clk_hz. Requires both dds_ftw_gpio_base and
             // dds_clk_hz to have been supplied at construction (the clock
             // is board-specific - 50 MHz on pluto_sky, 40 MHz on rk7020f -
             // so there's no safe default to fall back to).
