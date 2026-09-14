@@ -22,26 +22,26 @@
 set -euo pipefail
 
 show_usage() {
-    echo "Usage: $0 --host <ip> [--user <user>] [--port <port>] (--start|--persistent) <archive.tar.gz>"
+    echo "Usage: $0 [--host <ip>] [--user <user>] [--port <port>] [--start|--persistent] <archive.tar.gz>"
     echo ""
     echo "Options:"
-    echo "  --host <ip>       Адрес платы (обязательно)"
+    echo "  --host <ip>       Адрес платы [по умолчанию: 192.168.0.7]"
     echo "  --user <user>     SSH-пользователь [по умолчанию: root]"
     echo "  --port <port>     SSH-порт [по умолчанию: 22]"
-    echo "  --start           Залить в /tmp и сразу применить (не переживает reboot)"
+    echo "  --start           Залить в /tmp и сразу применить (не переживает reboot) [по умолчанию]"
     echo "  --persistent      Залить в /opt/iq_forge/current и сразу применить (переживает reboot)"
     echo "  -h, --help        Показать эту справку"
     echo ""
     echo "Examples:"
-    echo "  $0 --host 192.168.1.50 --start dist/rk7020f.tar.gz"
+    echo "  $0 dist/rk7020f.tar.gz"
     echo "  $0 --host 192.168.1.50 --user root --persistent dist/rk7020f.tar.gz"
     exit 0
 }
 
-HOST=""
+HOST="192.168.0.7"
 SSH_USER="root"
 PORT="22"
-MODE=""
+MODE="start"
 
 while [[ $# -gt 0 ]]; do
     case $1 in
@@ -78,14 +78,6 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-if [ -z "$HOST" ]; then
-    echo "Error: --host is required"
-    show_usage
-fi
-if [ -z "$MODE" ]; then
-    echo "Error: --start or --persistent is required"
-    show_usage
-fi
 if [ $# -lt 1 ]; then
     echo "Error: Missing archive path"
     show_usage
