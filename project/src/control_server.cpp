@@ -3,8 +3,6 @@
 #include "iq_forge.h"
 
 #include <cerrno>
-#include <cstdio>
-#include <cstdlib>
 #include <cstring>
 
 #include <arpa/inet.h>
@@ -17,21 +15,49 @@ namespace net {
 
 namespace {
 
-std::string trim(const std::string &s) {
-    std::size_t start = s.find_first_not_of(" \t");
-    if (start == std::string::npos) {
-        return "";
-    }
-    std::size_t end = s.find_last_not_of(" \t");
-    return s.substr(start, end - start + 1);
+std::uint64_t double_to_bits(double d) {
+    std::uint64_t u;
+    std::memcpy(&u, &d, sizeof(u));
+    return u;
 }
 
-// %.6f rather than iostream's default (which switches to scientific
-// notation past 6 significant digits -- DDS frequencies routinely have 7-8).
-std::string format_hz(double hz) {
-    char buf[64];
-    std::snprintf(buf, sizeof(buf), "%.6f", hz);
-    return buf;
+double bits_to_double(std::uint64_t u) {
+    double d;
+    std::memcpy(&d, &u, sizeof(d));
+    return d;
+}
+
+void encode(const packet &p, std::uint8_t out[kPacketSize]) {
+    out[0] = static_cast<std::uint8_t>(p.magic >> 24);
+    out[1] = static_cast<std::uint8_t>(p.magic >> 16);
+    out[2] = static_cast<std::uint8_t>(p.magic >> 8);
+    out[3] = static_cast<std::uint8_t>(p.magic);
+    out[4] = static_cast<std::uint8_t>(p.command >> 8);
+    out[5] = static_cast<std::uint8_t>(p.command);
+    out[6] = static_cast<std::uint8_t>(p.code >> 8);
+    out[7] = static_cast<std::uint8_t>(p.code);
+    out[8] = static_cast<std::uint8_t>(p.query_id >> 24);
+    out[9] = static_cast<std::uint8_t>(p.query_id >> 16);
+    out[10] = static_cast<std::uint8_t>(p.query_id >> 8);
+    out[11] = static_cast<std::uint8_t>(p.query_id);
+    for (int i = 0; i < 8; ++i) {
+        out[12 + i] = static_cast<std::uint8_t>(p.arg >> (56 - 8 * i));
+    }
+}
+
+packet decode(const std::uint8_t in[kPacketSize]) {
+    packet p;
+    p.magic = (static_cast<std::uint32_t>(in[0]) << 24) | (static_cast<std::uint32_t>(in[1]) << 16) |
+              (static_cast<std::uint32_t>(in[2]) << 8) | static_cast<std::uint32_t>(in[3]);
+    p.command = static_cast<std::uint16_t>((in[4] << 8) | in[5]);
+    p.code = static_cast<std::uint16_t>((in[6] << 8) | in[7]);
+    p.query_id = (static_cast<std::uint32_t>(in[8]) << 24) | (static_cast<std::uint32_t>(in[9]) << 16) |
+                 (static_cast<std::uint32_t>(in[10]) << 8) | static_cast<std::uint32_t>(in[11]);
+    p.arg = 0;
+    for (int i = 0; i < 8; ++i) {
+        p.arg = (p.arg << 8) | in[12 + i];
+    }
+    return p;
 }
 
 } // namespace
@@ -108,94 +134,102 @@ void control_server::accept_loop() {
 }
 
 void control_server::handle_client(int client_fd) {
-    std::string buf;
-    char chunk[256];
     while (m_running.load()) {
-        ssize_t n = ::recv(client_fd, chunk, sizeof(chunk), 0);
-        if (n <= 0) {
-            return; // client disconnected or socket error
+        std::uint8_t raw[kPacketSize];
+        std::size_t have = 0;
+        while (have < kPacketSize) {
+            ssize_t n = ::recv(client_fd, raw + have, kPacketSize - have, 0);
+            if (n <= 0) {
+                return; // client disconnected or socket error
+            }
+            have += static_cast<std::size_t>(n);
         }
-        buf.append(chunk, static_cast<std::size_t>(n));
 
-        std::size_t pos;
-        while ((pos = buf.find('\n')) != std::string::npos) {
-            std::string line = buf.substr(0, pos);
-            buf.erase(0, pos + 1);
-            if (!line.empty() && line.back() == '\r') {
-                line.pop_back();
-            }
-            if (line.empty()) {
-                continue;
-            }
+        packet req = decode(raw);
+        packet resp;
+        resp.query_id = req.query_id;
 
-            std::string response = handle_line(line);
-            response += '\n';
-            std::size_t sent = 0;
-            while (sent < response.size()) {
-                ssize_t written = ::send(client_fd, response.data() + sent, response.size() - sent, 0);
-                if (written <= 0) {
-                    return;
-                }
-                sent += static_cast<std::size_t>(written);
+        if (req.magic != kProtocolMagic) {
+            // Framing is untrustworthy once the magic doesn't match (the
+            // rest of this "packet" may not even be a real header) --
+            // safer to drop the connection than to guess where the next
+            // real packet starts.
+            return;
+        }
+
+        resp = handle_request(req);
+
+        std::uint8_t out[kPacketSize];
+        encode(resp, out);
+        std::size_t sent = 0;
+        while (sent < kPacketSize) {
+            ssize_t written = ::send(client_fd, out + sent, kPacketSize - sent, 0);
+            if (written <= 0) {
+                return;
             }
+            sent += static_cast<std::size_t>(written);
         }
     }
 }
 
-std::string control_server::handle_line(const std::string &line) {
-    std::string cmd = line;
-    std::string arg;
-    std::size_t sp = line.find(' ');
-    if (sp != std::string::npos) {
-        cmd = line.substr(0, sp);
-        arg = trim(line.substr(sp + 1));
+packet control_server::handle_request(const packet &req) {
+    packet resp;
+    resp.query_id = req.query_id;
+
+    switch (static_cast<protocol_command>(req.command)) {
+        case protocol_command::ping: {
+            resp.code = static_cast<std::uint16_t>(protocol_code::ack);
+            return resp;
+        }
+
+        case protocol_command::set_freq: {
+            double hz = bits_to_double(req.arg);
+            if (!m_forge.set_dds_frequency_hz(hz)) {
+                resp.code = static_cast<std::uint16_t>(protocol_code::nack);
+                return resp;
+            }
+            auto actual = m_forge.get_dds_frequency_hz();
+            resp.code = static_cast<std::uint16_t>(protocol_code::ack);
+            resp.arg = double_to_bits(actual ? *actual : hz);
+            return resp;
+        }
+
+        case protocol_command::get_freq: {
+            auto hz = m_forge.get_dds_frequency_hz();
+            if (!hz) {
+                resp.code = static_cast<std::uint16_t>(protocol_code::nack);
+                return resp;
+            }
+            resp.code = static_cast<std::uint16_t>(protocol_code::ack);
+            resp.arg = double_to_bits(*hz);
+            return resp;
+        }
+
+        case protocol_command::enable:
+        case protocol_command::disable: {
+            bool on = static_cast<protocol_command>(req.command) == protocol_command::enable;
+            if (!m_forge.set_dds_enabled(on)) {
+                resp.code = static_cast<std::uint16_t>(protocol_code::nack);
+                return resp;
+            }
+            resp.code = static_cast<std::uint16_t>(protocol_code::ack);
+            return resp;
+        }
+
+        case protocol_command::get_enabled: {
+            auto en = m_forge.dds_enabled();
+            if (!en) {
+                resp.code = static_cast<std::uint16_t>(protocol_code::nack);
+                return resp;
+            }
+            resp.code = static_cast<std::uint16_t>(protocol_code::ack);
+            resp.arg = *en ? 1 : 0;
+            return resp;
+        }
     }
 
-    if (cmd == "PING") {
-        return "OK";
-    }
-
-    if (cmd == "SET_FREQ") {
-        if (arg.empty()) {
-            return "ERR missing frequency";
-        }
-        char *end = nullptr;
-        double hz = std::strtod(arg.c_str(), &end);
-        if (end == arg.c_str()) {
-            return "ERR invalid frequency";
-        }
-        if (!m_forge.set_dds_frequency_hz(hz)) {
-            return "ERR " + m_forge.dds_ftw_gpio_error();
-        }
-        auto actual = m_forge.get_dds_frequency_hz();
-        return "OK " + format_hz(actual ? *actual : hz);
-    }
-
-    if (cmd == "GET_FREQ") {
-        auto hz = m_forge.get_dds_frequency_hz();
-        if (!hz) {
-            return "ERR " + m_forge.dds_ftw_gpio_error();
-        }
-        return "OK " + format_hz(*hz);
-    }
-
-    if (cmd == "ENABLE" || cmd == "DISABLE") {
-        bool on = (cmd == "ENABLE");
-        if (!m_forge.set_dds_enabled(on)) {
-            return "ERR " + m_forge.dds_ctrl_gpio_error();
-        }
-        return "OK";
-    }
-
-    if (cmd == "GET_ENABLED") {
-        auto en = m_forge.dds_enabled();
-        if (!en) {
-            return "ERR " + m_forge.dds_ctrl_gpio_error();
-        }
-        return std::string("OK ") + (*en ? "1" : "0");
-    }
-
-    return "ERR unknown command";
+    resp.code = static_cast<std::uint16_t>(protocol_code::nack_unknown_command);
+    return resp;
 }
 
 } // namespace net
