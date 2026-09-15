@@ -119,7 +119,33 @@ rm -f "$ARCHIVE"
 
 cd "$DIR"
 chmod +x iq_forge_app
-./iq_forge_app
+rm -f iq_forge_app.log
+
+# iq_forge_app now stays running in the background (see below) instead of
+# exiting right after bring-up, so a previous deploy's instance is still
+# alive and holding the control port/hardware unless killed first. No
+# pkill on this target's busybox -- do it by hand.
+for pid in $(ps | grep '[i]q_forge_app' | awk '{print $1}'); do
+    kill "$pid" 2>/dev/null || true
+done
+sleep 1
+
+# Needs to be launched detached, or this ssh command would just hang -- poll
+# its log for a few seconds so bring-up status (fpga/overlay/AD9361/vendor-id)
+# still shows up here like before, then leave it running.
+nohup ./iq_forge_app > iq_forge_app.log 2>&1 < /dev/null &
+APP_PID=$!
+for _ in $(seq 1 20); do
+    sleep 0.5
+    if grep -qE "network control|^error:" iq_forge_app.log 2>/dev/null; then
+        break
+    fi
+done
+cat iq_forge_app.log
+if ! kill -0 "$APP_PID" 2>/dev/null; then
+    echo "error: iq_forge_app exited early, see log above"
+    exit 1
+fi
 REMOTE_SCRIPT
 
 if [ "$MODE" = "start" ]; then

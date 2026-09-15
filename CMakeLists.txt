@@ -10,6 +10,8 @@ if(CMAKE_INSTALL_PREFIX_INITIALIZED_TO_DEFAULT)
     set(CMAKE_INSTALL_PREFIX "${CMAKE_SOURCE_DIR}/dist" CACHE PATH "" FORCE)
 endif()
 
+find_package(Threads REQUIRED)
+
 add_subdirectory(external/fpga_loader)
 
 add_library(hal_spi
@@ -79,9 +81,10 @@ target_link_libraries(drivers_dds_ctrl_gpio PUBLIC hal_gpio)
 
 add_library(project_iq_forge
     project/src/iq_forge.cpp
+    project/src/control_server.cpp
 )
 target_include_directories(project_iq_forge PUBLIC project/inc)
-target_link_libraries(project_iq_forge PUBLIC drivers_ad9361 drivers_ad9361_ctrl_gpio drivers_dds_ctrl_gpio ad9361_transceiver hal_spi fpga::loader)
+target_link_libraries(project_iq_forge PUBLIC drivers_ad9361 drivers_ad9361_ctrl_gpio drivers_dds_ctrl_gpio ad9361_transceiver hal_spi fpga::loader Threads::Threads)
 
 add_executable(iq_forge_app project/src/main.cpp)
 target_link_libraries(iq_forge_app PRIVATE project_iq_forge)

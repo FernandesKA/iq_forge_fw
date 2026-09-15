@@ -5,8 +5,10 @@
  *        from the current directory, loads the FPGA bitstream, applies the
  *        device-tree overlay, brings up the AD9361, then opens an
  *        interactive numbered menu to control TX frequency/attenuation/AGC,
- *        TX and DDS enable, and read back live hardware state. Meant to be
- *        deployed to the target board (see scripts/deploy.sh,
+ *        TX and DDS enable, and read back live hardware state. Also starts a
+ *        small TCP control server (see control_server.h) so a host tool
+ *        (iq_forge_gui's "iq_forge" device) can drive the DDS remotely.
+ *        Meant to be deployed to the target board (see scripts/deploy.sh,
  *        scripts/load.sh) - a plain `./iq_forge_app` with no arguments does
  *        the whole thing, no flags needed on target.
  * @version 0.2
@@ -16,6 +18,7 @@
  *
  */
 
+#include "control_server.h"
 #include "iq_forge.h"
 
 #include <cstdint>
@@ -681,6 +684,13 @@ static void run_menu(project::iq_forge &forge) {
 }
 
 int main(int argc, char **argv) {
+    // stdout is fully-buffered (not line-buffered) by libc whenever it isn't
+    // a tty -- e.g. redirected to a log file by load.sh/S99iq_forge, or when
+    // running non-interactively in the background. Without this, startup
+    // messages (fpga/overlay/vendor-id/"network control: listening") can sit
+    // in the buffer indefinitely instead of showing up in the log promptly.
+    std::setvbuf(stdout, nullptr, _IOLBF, 0);
+
     if (argc >= 2 &&
         (std::strcmp(argv[1], "--help") == 0 || std::strcmp(argv[1], "-h") == 0 || std::strcmp(argv[1], "help") == 0)) {
         usage(argv[0]);
@@ -761,6 +771,28 @@ int main(int argc, char **argv) {
     }
     std::printf("ad9361: transceiver initialized\n");
 
-    run_menu(forge);
-    return EXIT_SUCCESS;
+    net::control_server server(forge);
+    std::string server_error;
+    if (server.start(server_error)) {
+        std::printf("network control: listening on port %u (see iq_forge_gui's \"iq_forge\" device)\n",
+                     server.port());
+    } else {
+        std::fprintf(stderr, "warning: network control server failed to start: %s\n", server_error.c_str());
+    }
+
+    if (isatty(STDIN_FILENO)) {
+        run_menu(forge);
+        return EXIT_SUCCESS;
+    }
+
+    // Non-interactive launch (e.g. the S99iq_forge boot init script, stdin
+    // not a tty): there's no console menu to run, so the process would
+    // otherwise just exit right after bring-up and take the control server
+    // down with it. Block here instead, forever -- pause() returns on a
+    // caught signal, but nothing here installs a handler, so a normal
+    // SIGTERM (e.g. system shutdown) still terminates the process the usual
+    // way; this loop just keeps it alive in between.
+    for (;;) {
+        ::pause();
+    }
 }
