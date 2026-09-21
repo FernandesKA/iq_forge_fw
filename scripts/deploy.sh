@@ -165,6 +165,13 @@ if [ -f "$CONFIG_DIR/dds_ftw_gpio_base" ]; then
     DDS_FTW_GPIO_BASE_LINE="DDS_FTW_GPIO_BASE=$DDS_FTW_GPIO_BASE"
 fi
 
+LFM_GPIO_BASE_LINE=""
+if [ -f "$CONFIG_DIR/lfm_gpio_base" ]; then
+    LFM_GPIO_BASE="$(tr -d '[:space:]' < "$CONFIG_DIR/lfm_gpio_base")"
+    echo "Including DDS LFM GPIO base: $LFM_GPIO_BASE"
+    LFM_GPIO_BASE_LINE="LFM_GPIO_BASE=$LFM_GPIO_BASE"
+fi
+
 DDS_CLK_HZ_LINE=""
 if [ -f "$CONFIG_DIR/dds_clk_hz" ]; then
     DDS_CLK_HZ="$(tr -d '[:space:]' < "$CONFIG_DIR/dds_clk_hz")"
@@ -179,6 +186,7 @@ OVERLAY_NAME=$OVERLAY_NAME
 $GPIO_BASE_LINE
 $DDS_GPIO_BASE_LINE
 $DDS_FTW_GPIO_BASE_LINE
+$LFM_GPIO_BASE_LINE
 $DDS_CLK_HZ_LINE
 EOF
 

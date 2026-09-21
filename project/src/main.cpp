@@ -42,7 +42,8 @@ static void usage(const char *prog) {
         "  the FPGA bitstream, applies the device-tree overlay, brings up\n"
         "  the AD9361, then opens an interactive numbered menu to read/set\n"
         "  TX frequency and attenuation, RX AGC mode, TX enable/disable,\n"
-        "  DDS enable/disable/frequency/reset, and read back live hardware\n"
+        "  DDS enable/disable/frequency/reset, DDS mode (sine or LFM chirp)\n"
+        "  and LFM start/stop/sweep time, and read back live hardware\n"
         "  state.\n",
         prog);
 }
@@ -168,6 +169,26 @@ static std::optional<drivers::rx_gain_mode> select_agc_mode() {
         case 3: return drivers::rx_gain_mode::slow_attack_agc;
         default: return drivers::rx_gain_mode::hybrid_agc;
     }
+}
+
+static std::optional<drivers::dds_mode> select_dds_mode() {
+    std::printf("\n 1) sine (fixed tone at the DDS frequency)\n 2) LFM (chirp, see items 27-33)\n 0) back\n");
+    auto choice = read_choice("> ", 0, 2);
+    if (!choice || *choice == 0) {
+        return std::nullopt;
+    }
+    return *choice == 1 ? drivers::dds_mode::sine : drivers::dds_mode::lfm;
+}
+
+// true = continious (free-running, ignores stop, wraps), false = one-shot
+static std::optional<bool> select_lfm_continious() {
+    std::printf("\n 1) one-shot (ramp saturates at stop)\n"
+                " 2) continious (free-running, ignores stop, wraps at 2^24)\n 0) back\n");
+    auto choice = read_choice("> ", 0, 2);
+    if (!choice || *choice == 0) {
+        return std::nullopt;
+    }
+    return *choice == 2;
 }
 
 static std::optional<bool> select_on_off() {
@@ -410,13 +431,22 @@ static void print_menu() {
         "23) AD9361 TX->RX digital loopback - enable (verify TX_D/TX_FRAME\n"
         "    data actually reaches the chip, via ad9361_rx_lvds_wrapper)\n"
         "24) AD9361 TX->RX digital loopback - disable\n"
+        "25) DDS mode - select (sine / LFM)\n"
+        "26) DDS mode - read\n"
+        "27) LFM config - read (start/stop/increment/sweep time/mode)\n"
+        "28) LFM start frequency - set (Hz)\n"
+        "29) LFM stop frequency - set (Hz)\n"
+        "30) LFM sweep time - set (us, picks the increment for current start/stop)\n"
+        "31) LFM increment - set (raw FTW per PL clock)\n"
+        "32) LFM one-shot / continious - select\n"
+        "33) LFM restart sweep from start\n"
         " 0) exit\n");
 }
 
 static void run_menu(project::iq_forge &forge) {
     for (;;) {
         print_menu();
-        auto choice = read_choice("> ", 0, 24);
+        auto choice = read_choice("> ", 0, 33);
         if (!choice || *choice == 0) {
             return;
         }
@@ -677,6 +707,140 @@ static void run_menu(project::iq_forge &forge) {
                 }
                 break;
             }
+            case 25: {
+                auto mode = select_dds_mode();
+                if (!mode) {
+                    break;
+                }
+                if (forge.set_dds_mode(*mode)) {
+                    std::printf("dds-mode: %s\n", *mode == drivers::dds_mode::lfm ? "lfm" : "sine");
+                } else {
+                    std::printf("error: %s\n", forge.dds_ctrl_gpio_error().c_str());
+                }
+                break;
+            }
+            case 26: {
+                auto mode = forge.get_dds_mode();
+                if (mode) {
+                    std::printf("dds-mode: %s\n", *mode == drivers::dds_mode::lfm ? "lfm" : "sine");
+                } else {
+                    std::printf("error: %s\n", forge.dds_ctrl_gpio_error().c_str());
+                }
+                break;
+            }
+            case 27: {
+                auto start = forge.get_lfm_start_hz();
+                if (!start) {
+                    std::printf("error: %s\n", forge.dds_lfm_gpio_error().c_str());
+                    break;
+                }
+                auto stop = forge.get_lfm_stop_hz();
+                auto incr = forge.get_lfm_incr();
+                auto continious = forge.lfm_continious();
+                if (!stop || !incr) {
+                    std::printf("error: %s\n", forge.dds_lfm_gpio_error().c_str());
+                    break;
+                }
+                std::printf("lfm-start: %.3f Hz\n", *start);
+                std::printf("lfm-stop: %.3f Hz\n", *stop);
+                std::printf("lfm-incr: %u FTW/clk\n", *incr);
+                auto sweep = forge.get_lfm_sweep_time_s();
+                if (sweep) {
+                    std::printf("lfm-sweep-time: %.3f us (%.3f Hz/us)\n", *sweep * 1e6,
+                                (*stop - *start) / (*sweep * 1e6));
+                } else {
+                    std::printf("lfm-sweep-time: n/a (%s)\n", forge.dds_lfm_gpio_error().c_str());
+                }
+                if (continious) {
+                    std::printf("lfm-mode: %s\n", *continious ? "continious" : "one-shot");
+                } else {
+                    std::printf("lfm-mode: n/a (%s)\n", forge.dds_ctrl_gpio_error().c_str());
+                }
+                break;
+            }
+            case 28: {
+                auto hz = read_double("Enter LFM start frequency in Hz: ");
+                if (!hz) {
+                    std::printf("invalid or cancelled\n");
+                    break;
+                }
+                if (forge.set_lfm_start_hz(*hz)) {
+                    auto actual = forge.get_lfm_start_hz();
+                    std::printf("lfm-start: %.3f Hz (requested %.3f Hz, rounded to nearest FTW step)\n",
+                                actual ? *actual : *hz, *hz);
+                } else {
+                    std::printf("error: %s\n", forge.dds_lfm_gpio_error().c_str());
+                }
+                break;
+            }
+            case 29: {
+                auto hz = read_double("Enter LFM stop frequency in Hz: ");
+                if (!hz) {
+                    std::printf("invalid or cancelled\n");
+                    break;
+                }
+                if (forge.set_lfm_stop_hz(*hz)) {
+                    auto actual = forge.get_lfm_stop_hz();
+                    std::printf("lfm-stop: %.3f Hz (requested %.3f Hz, rounded to nearest FTW step)\n",
+                                actual ? *actual : *hz, *hz);
+                } else {
+                    std::printf("error: %s\n", forge.dds_lfm_gpio_error().c_str());
+                }
+                break;
+            }
+            case 30: {
+                auto us = read_double("Enter LFM sweep time (start -> stop) in microseconds: ");
+                if (!us) {
+                    std::printf("invalid or cancelled\n");
+                    break;
+                }
+                if (forge.set_lfm_sweep_time_s(*us * 1e-6)) {
+                    auto actual = forge.get_lfm_sweep_time_s();
+                    auto incr = forge.get_lfm_incr();
+                    if (actual && incr) {
+                        std::printf("lfm-sweep-time: %.3f us (requested %.3f us, increment %u FTW/clk)\n",
+                                    *actual * 1e6, *us, *incr);
+                    } else {
+                        std::printf("lfm-sweep-time: set (requested %.3f us)\n", *us);
+                    }
+                } else {
+                    std::printf("error: %s\n", forge.dds_lfm_gpio_error().c_str());
+                }
+                break;
+            }
+            case 31: {
+                auto incr = read_choice("Enter LFM increment (FTW per PL clock, 1-16777215): ", 1, 16777215);
+                if (!incr) {
+                    std::printf("invalid or cancelled\n");
+                    break;
+                }
+                if (forge.set_lfm_incr(static_cast<std::uint32_t>(*incr))) {
+                    std::printf("lfm-incr: %ld FTW/clk\n", *incr);
+                } else {
+                    std::printf("error: %s\n", forge.dds_lfm_gpio_error().c_str());
+                }
+                break;
+            }
+            case 32: {
+                auto continious = select_lfm_continious();
+                if (!continious) {
+                    break;
+                }
+                if (forge.set_lfm_continious(*continious)) {
+                    std::printf("lfm-mode: %s\n", *continious ? "continious" : "one-shot");
+                } else {
+                    std::printf("error: %s\n", forge.dds_ctrl_gpio_error().c_str());
+                }
+                break;
+            }
+            case 33: {
+                if (forge.restart_lfm()) {
+                    std::printf("lfm: restarted from start\n");
+                } else {
+                    std::printf("error: %s\n", forge.dds_ctrl_gpio_error().c_str());
+                }
+                break;
+            }
             default:
                 break;
         }
@@ -730,7 +894,13 @@ int main(int argc, char **argv) {
         dds_clk_hz = std::strtod(it->second.c_str(), nullptr);
     }
 
-    project::iq_forge forge(spi_cfg, ad9361_ctrl_gpio_base, dds_ctrl_gpio_base, dds_ftw_gpio_base, dds_clk_hz);
+    std::optional<std::uintptr_t> lfm_gpio_base;
+    if (auto it = manifest->find("LFM_GPIO_BASE"); it != manifest->end()) {
+        lfm_gpio_base = static_cast<std::uintptr_t>(std::strtoull(it->second.c_str(), nullptr, 0));
+    }
+
+    project::iq_forge forge(spi_cfg, ad9361_ctrl_gpio_base, dds_ctrl_gpio_base, dds_ftw_gpio_base, dds_clk_hz,
+                             lfm_gpio_base);
 
     if (forge.fpga_state() == "operating") {
         std::printf("fpga already operating, skip reload\n");

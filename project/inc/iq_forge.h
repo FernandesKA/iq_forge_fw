@@ -21,6 +21,7 @@
 #include "ad9361_transceiver.h"
 #include "dds_ctrl_gpio.h"
 #include "dds_ftw_gpio.h"
+#include "dds_lfm_gpio.h"
 #include "spi_device.h"
 
 #include "dt_overlay.hpp"
@@ -34,7 +35,8 @@ namespace project {
                                std::optional<std::uintptr_t> ad9361_ctrl_gpio_base = std::nullopt,
                                std::optional<std::uintptr_t> dds_ctrl_gpio_base = std::nullopt,
                                std::optional<std::uintptr_t> dds_ftw_gpio_base = std::nullopt,
-                               std::optional<double> dds_clk_hz = std::nullopt);
+                               std::optional<double> dds_clk_hz = std::nullopt,
+                               std::optional<std::uintptr_t> lfm_gpio_base = std::nullopt);
 
             std::optional<std::uint8_t> read_ad9361_vendor_id() const;
             const std::string &ad9361_spi_error() const;
@@ -97,6 +99,38 @@ namespace project {
 
             const std::string &dds_ftw_gpio_error() const;
 
+            // Sine (fixed tone at the DDS FTW) vs LFM (chirp) generation
+            // while the DDS is enabled -- axi_gpio_dds_ctrl mode bit.
+            bool set_dds_mode(drivers::dds_mode mode) const;
+            std::optional<drivers::dds_mode> get_dds_mode() const;
+
+            // LFM: continious (free-running, ignores stop, wraps at 2^24) vs
+            // one-shot (saturates at stop), and restart-from-start.
+            bool set_lfm_continious(bool continious) const;
+            std::optional<bool> lfm_continious() const;
+            bool restart_lfm() const;
+
+            // LFM sweep bounds, in Hz (0 .. Nyquist of the DDS sample rate,
+            // same Hz<->FTW conversion as set_dds_frequency_hz).
+            bool set_lfm_start_hz(double hz) const;
+            std::optional<double> get_lfm_start_hz() const;
+            bool set_lfm_stop_hz(double hz) const;
+            std::optional<double> get_lfm_stop_hz() const;
+
+            // Raw FTW added per PL clock cycle (the actual HW register).
+            bool set_lfm_incr(std::uint32_t ftw_per_clk) const;
+            std::optional<std::uint32_t> get_lfm_incr() const;
+
+            // Sweep duration start -> stop, derived from the increment:
+            // set picks the closest integer increment for the *currently
+            // programmed* start/stop (so program those first, and re-set the
+            // time after changing them); get reports what the increment
+            // actually gives.
+            bool set_lfm_sweep_time_s(double seconds) const;
+            std::optional<double> get_lfm_sweep_time_s() const;
+
+            const std::string &dds_lfm_gpio_error() const;
+
         private:
             hal::spi_device m_ad9361_spi;
             drivers::ad9361 m_ad9361;
@@ -108,10 +142,12 @@ namespace project {
             std::optional<std::uintptr_t> m_dds_ctrl_gpio_base;
             std::optional<std::uintptr_t> m_dds_ftw_gpio_base;
             std::optional<double> m_dds_clk_hz;
+            std::optional<std::uintptr_t> m_lfm_gpio_base;
 
             mutable std::string m_ad9361_ctrl_gpio_last_error;
             mutable std::string m_dds_ctrl_gpio_last_error;
             mutable std::string m_dds_ftw_gpio_last_error;
+            mutable std::string m_dds_lfm_gpio_last_error;
     };
 
 }
