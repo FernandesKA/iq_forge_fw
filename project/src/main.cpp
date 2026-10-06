@@ -21,6 +21,7 @@
 #include "control_server.h"
 #include "iq_forge.h"
 
+#include <cstddef>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -40,7 +41,8 @@ static void usage(const char *prog) {
         "Usage: %s [--help]\n"
         "  Reads manifest.env + spi.json from the current directory, loads\n"
         "  the FPGA bitstream, applies the device-tree overlay, brings up\n"
-        "  the AD9361, then opens an interactive numbered menu to read/set\n"
+        "  the AD9361, then opens an interactive menu (TX / RX / DDS / LFM /\n"
+        "  LVDS / BIST sub-menus) to read/set\n"
         "  TX frequency and attenuation, RX AGC mode, TX enable/disable,\n"
         "  DDS enable/disable/frequency/reset, DDS mode (sine or LFM chirp)\n"
         "  and LFM start/stop/sweep time, and read back live hardware\n"
@@ -172,7 +174,7 @@ static std::optional<drivers::rx_gain_mode> select_agc_mode() {
 }
 
 static std::optional<drivers::dds_mode> select_dds_mode() {
-    std::printf("\n 1) sine (fixed tone at the DDS frequency)\n 2) LFM (chirp, see items 27-33)\n 0) back\n");
+    std::printf("\n 1) sine (fixed tone at the DDS frequency)\n 2) LFM (chirp, configure in the LFM menu)\n 0) back\n");
     auto choice = read_choice("> ", 0, 2);
     if (!choice || *choice == 0) {
         return std::nullopt;
@@ -402,447 +404,507 @@ static void run_tx_clock_data_delay_tuner(project::iq_forge &forge) {
     disable_raw_mode();
 }
 
-static void print_menu() {
-    std::printf(
-        "\n"
-        "==== iq_forge console ====\n"
-        " 1) TX LO frequency - read\n"
-        " 2) TX LO frequency - set\n"
-        " 3) TX attenuation - read\n"
-        " 4) TX attenuation - set\n"
-        " 5) RX AGC mode - set\n"
-        " 6) TX enable/disable\n"
-        " 7) TX state - read (ENSM)\n"
-        " 8) DDS enable/disable\n"
-        " 9) DDS state - read\n"
-        "10) DDS frequency - read (phase increment / FTW)\n"
-        "11) DDS frequency - set (phase increment / FTW)\n"
-        "12) DDS reset\n"
-        "13) TX clock/data delay - read (FB_CLK_DELAY / TX_DATA_DELAY)\n"
-        "14) TX clock/data delay - set (FB_CLK_DELAY / TX_DATA_DELAY)\n"
-        "15) TX clock/data delay - interactive tune (+/-, live)\n"
-        "16) TX quadrature/LO-leakage - recalibrate\n"
-        "17) LVDS invert - read (ctrl1/ctrl2)\n"
-        "18) LVDS invert - set (ctrl1/ctrl2, raw byte 0-255)\n"
-        "19) LVDS invert - interactive tune (bit toggle, live)\n"
-        "20) AD9361 internal BIST tone - enable (TX1, bypasses LVDS/DDS)\n"
-        "21) AD9361 internal BIST PRBS - enable (TX1, bypasses LVDS/DDS)\n"
-        "22) AD9361 internal BIST - disable (back to normal digital data)\n"
-        "23) AD9361 TX->RX digital loopback - enable (verify TX_D/TX_FRAME\n"
-        "    data actually reaches the chip, via ad9361_rx_lvds_wrapper)\n"
-        "24) AD9361 TX->RX digital loopback - disable\n"
-        "25) DDS mode - select (sine / LFM)\n"
-        "26) DDS mode - read\n"
-        "27) LFM config - read (start/stop/increment/sweep time/mode)\n"
-        "28) LFM start frequency - set (Hz)\n"
-        "29) LFM stop frequency - set (Hz)\n"
-        "30) LFM sweep time - set (us, picks the increment for current start/stop)\n"
-        "31) LFM increment - set (raw FTW per PL clock)\n"
-        "32) LFM one-shot / continious - select\n"
-        "33) LFM restart sweep from start\n"
-        " 0) exit\n");
+static void act_tx_lo_read(project::iq_forge &forge) {
+    std::uint64_t hz = 0;
+    if (forge.get_ad9361_tx_lo_frequency(hz)) {
+        std::printf("tx-lo: %llu Hz\n", static_cast<unsigned long long>(hz));
+    } else {
+        std::printf("error: get tx frequency failed (%d)\n", forge.ad9361_transceiver_error_code());
+    }
+}
+
+static void act_tx_lo_set(project::iq_forge &forge) {
+    auto hz = read_u64("Enter TX LO frequency in Hz: ");
+    if (!hz) {
+        std::printf("invalid or cancelled\n");
+        return;
+    }
+    if (forge.set_ad9361_tx_lo_frequency(*hz)) {
+        std::printf("tx-lo: %llu Hz\n", static_cast<unsigned long long>(*hz));
+    } else {
+        std::printf("error: set tx frequency failed (%d)\n", forge.ad9361_transceiver_error_code());
+    }
+}
+
+static void act_tx_atten_read(project::iq_forge &forge) {
+    std::uint32_t mdb = 0;
+    if (forge.get_ad9361_tx_attenuation(mdb)) {
+        std::printf("tx-atten: %.3f dB\n", mdb / 1000.0);
+    } else {
+        std::printf("error: get tx attenuation failed (%d)\n", forge.ad9361_transceiver_error_code());
+    }
+}
+
+static void act_tx_atten_set(project::iq_forge &forge) {
+    auto db = read_double("Enter TX attenuation in dB: ");
+    if (!db || *db < 0.0) {
+        std::printf("invalid or cancelled\n");
+        return;
+    }
+    std::uint32_t mdb = static_cast<std::uint32_t>(*db * 1000.0 + 0.5);
+    if (forge.set_ad9361_tx_attenuation(mdb)) {
+        std::printf("tx-atten: %.3f dB\n", mdb / 1000.0);
+    } else {
+        std::printf("error: set tx attenuation failed (%d)\n", forge.ad9361_transceiver_error_code());
+    }
+}
+
+static void act_rx_agc_set(project::iq_forge &forge) {
+    auto mode = select_agc_mode();
+    if (!mode) {
+        return;
+    }
+    if (!forge.set_ad9361_rx_gain_control_mode(*mode)) {
+        std::printf("error: set agc mode failed (%d)\n", forge.ad9361_transceiver_error_code());
+    }
+}
+
+static void act_tx_enable(project::iq_forge &forge) {
+    auto on = select_on_off();
+    if (!on) {
+        return;
+    }
+    bool ok = *on ? forge.enable_ad9361_tx() : forge.disable_ad9361_tx();
+    if (ok) {
+        std::printf("tx: %s\n", *on ? "enabled" : "disabled");
+    } else {
+        std::printf("error: %s tx failed (%d)\n", *on ? "enable" : "disable",
+                    forge.ad9361_transceiver_error_code());
+    }
+}
+
+static void act_tx_state_read(project::iq_forge &forge) {
+    drivers::ensm_state state;
+    if (forge.get_ad9361_ensm_state(state)) {
+        std::printf("tx: %s\n", ensm_state_name(state));
+    } else {
+        std::printf("error: get ensm state failed (%d)\n", forge.ad9361_transceiver_error_code());
+    }
+}
+
+static void act_dds_enable(project::iq_forge &forge) {
+    auto on = select_on_off();
+    if (!on) {
+        return;
+    }
+    if (forge.set_dds_enabled(*on)) {
+        std::printf("dds: %s\n", *on ? "enabled" : "disabled");
+    } else {
+        std::printf("error: %s\n", forge.dds_ctrl_gpio_error().c_str());
+    }
+}
+
+static void act_dds_state_read(project::iq_forge &forge) {
+    auto enabled = forge.dds_enabled();
+    if (enabled) {
+        std::printf("dds: %s\n", *enabled ? "enabled" : "disabled");
+    } else {
+        std::printf("error: %s\n", forge.dds_ctrl_gpio_error().c_str());
+    }
+}
+
+static void act_dds_freq_read(project::iq_forge &forge) {
+    auto hz = forge.get_dds_frequency_hz();
+    if (hz) {
+        std::printf("dds-freq: %.3f Hz\n", *hz);
+    } else {
+        std::printf("error: %s\n", forge.dds_ftw_gpio_error().c_str());
+    }
+}
+
+static void act_dds_freq_set(project::iq_forge &forge) {
+    auto hz = read_double("Enter DDS frequency in Hz: ");
+    if (!hz || *hz < 0.0) {
+        std::printf("invalid or cancelled\n");
+        return;
+    }
+    if (forge.set_dds_frequency_hz(*hz)) {
+        auto actual = forge.get_dds_frequency_hz();
+        if (actual) {
+            std::printf("dds-freq: %.3f Hz (requested %.3f Hz, rounded to nearest FTW step)\n", *actual,
+                        *hz);
+        } else {
+            std::printf("dds-freq: set (requested %.3f Hz)\n", *hz);
+        }
+    } else {
+        std::printf("error: %s\n", forge.dds_ftw_gpio_error().c_str());
+    }
+}
+
+static void act_dds_reset(project::iq_forge &forge) {
+    if (forge.reset_dds()) {
+        std::printf("dds: reset\n");
+    } else {
+        std::printf("error: %s\n", forge.dds_ctrl_gpio_error().c_str());
+    }
+}
+
+static void act_tx_delay_read(project::iq_forge &forge) {
+    std::uint8_t fb_clk_delay = 0, tx_data_delay = 0;
+    if (forge.get_ad9361_tx_clock_data_delay(fb_clk_delay, tx_data_delay)) {
+        std::printf("tx-clock-data-delay: fb_clk_delay=%u tx_data_delay=%u\n", fb_clk_delay,
+                    tx_data_delay);
+    } else {
+        std::printf("error: get tx clock/data delay failed (%d)\n", forge.ad9361_transceiver_error_code());
+    }
+}
+
+static void act_tx_delay_set(project::iq_forge &forge) {
+    auto fb_clk_delay = read_choice("Enter FB_CLK_DELAY (0-15): ", 0, 15);
+    if (!fb_clk_delay) {
+        std::printf("invalid or cancelled\n");
+        return;
+    }
+    auto tx_data_delay = read_choice("Enter TX_DATA_DELAY (0-15): ", 0, 15);
+    if (!tx_data_delay) {
+        std::printf("invalid or cancelled\n");
+        return;
+    }
+    if (forge.set_ad9361_tx_clock_data_delay(static_cast<std::uint8_t>(*fb_clk_delay),
+                                              static_cast<std::uint8_t>(*tx_data_delay))) {
+        std::printf("tx-clock-data-delay: fb_clk_delay=%ld tx_data_delay=%ld\n", *fb_clk_delay,
+                    *tx_data_delay);
+    } else {
+        std::printf("error: set tx clock/data delay failed (%d)\n", forge.ad9361_transceiver_error_code());
+    }
+}
+
+static void act_tx_delay_tune(project::iq_forge &forge) {
+    run_tx_clock_data_delay_tuner(forge);
+}
+
+static void act_tx_quad_cal(project::iq_forge &forge) {
+    if (forge.calibrate_ad9361_tx_quadrature()) {
+        std::printf("tx-quad-cal: done\n");
+    } else {
+        std::printf("error: tx quad cal failed (%d)\n", forge.ad9361_transceiver_error_code());
+    }
+}
+
+static void act_lvds_invert_read(project::iq_forge &forge) {
+    std::uint8_t c1 = 0, c2 = 0;
+    if (forge.get_ad9361_lvds_invert(c1, c2)) {
+        std::printf("lvds-invert: ctrl1=0x%02X ctrl2=0x%02X\n", c1, c2);
+    } else {
+        std::printf("error: get lvds invert failed (%d)\n", forge.ad9361_transceiver_error_code());
+    }
+}
+
+static void act_lvds_invert_set(project::iq_forge &forge) {
+    auto c1 = read_choice("Enter ctrl1 (0-255): ", 0, 255);
+    if (!c1) {
+        std::printf("invalid or cancelled\n");
+        return;
+    }
+    auto c2 = read_choice("Enter ctrl2 (0-255): ", 0, 255);
+    if (!c2) {
+        std::printf("invalid or cancelled\n");
+        return;
+    }
+    if (forge.set_ad9361_lvds_invert(static_cast<std::uint8_t>(*c1), static_cast<std::uint8_t>(*c2))) {
+        std::printf("lvds-invert: ctrl1=0x%02lX ctrl2=0x%02lX\n", *c1, *c2);
+    } else {
+        std::printf("error: set lvds invert failed (%d)\n", forge.ad9361_transceiver_error_code());
+    }
+}
+
+static void act_lvds_invert_tune(project::iq_forge &forge) {
+    run_lvds_invert_tuner(forge);
+}
+
+static void act_bist_tone(project::iq_forge &forge) {
+    auto hz = read_u64("Enter BIST tone frequency in Hz (0 for DC): ");
+    if (!hz) {
+        std::printf("invalid or cancelled\n");
+        return;
+    }
+    if (forge.set_ad9361_bist_tone(drivers::bist_mode::inject_tx, static_cast<std::uint32_t>(*hz), 0,
+                                    0x0)) {
+        std::printf("bist-tone: enabled at %llu Hz on TX1 (BIST - disable to turn off)\n",
+                    static_cast<unsigned long long>(*hz));
+    } else {
+        std::printf("error: bist tone failed (%d)\n", forge.ad9361_transceiver_error_code());
+    }
+}
+
+static void act_bist_prbs(project::iq_forge &forge) {
+    if (forge.set_ad9361_bist_prbs(drivers::bist_mode::inject_tx)) {
+        std::printf("bist-prbs: enabled on TX1 (BIST - disable to turn off)\n");
+    } else {
+        std::printf("error: bist prbs failed (%d)\n", forge.ad9361_transceiver_error_code());
+    }
+}
+
+static void act_bist_disable(project::iq_forge &forge) {
+    if (forge.set_ad9361_bist_prbs(drivers::bist_mode::disable)) {
+        std::printf("bist: disabled\n");
+    } else {
+        std::printf("error: bist disable failed (%d)\n", forge.ad9361_transceiver_error_code());
+    }
+}
+
+static void act_loopback_enable(project::iq_forge &forge) {
+    if (forge.set_ad9361_bist_loopback(1)) {
+        std::printf("loopback: enabled (TX digital data now mirrored to RX digital port)\n");
+    } else {
+        std::printf("error: loopback enable failed (%d)\n", forge.ad9361_transceiver_error_code());
+    }
+}
+
+static void act_loopback_disable(project::iq_forge &forge) {
+    if (forge.set_ad9361_bist_loopback(0)) {
+        std::printf("loopback: disabled\n");
+    } else {
+        std::printf("error: loopback disable failed (%d)\n", forge.ad9361_transceiver_error_code());
+    }
+}
+
+static void act_dds_mode_set(project::iq_forge &forge) {
+    auto mode = select_dds_mode();
+    if (!mode) {
+        return;
+    }
+    if (forge.set_dds_mode(*mode)) {
+        std::printf("dds-mode: %s\n", *mode == drivers::dds_mode::lfm ? "lfm" : "sine");
+    } else {
+        std::printf("error: %s\n", forge.dds_ctrl_gpio_error().c_str());
+    }
+}
+
+static void act_dds_mode_read(project::iq_forge &forge) {
+    auto mode = forge.get_dds_mode();
+    if (mode) {
+        std::printf("dds-mode: %s\n", *mode == drivers::dds_mode::lfm ? "lfm" : "sine");
+    } else {
+        std::printf("error: %s\n", forge.dds_ctrl_gpio_error().c_str());
+    }
+}
+
+static void act_lfm_read(project::iq_forge &forge) {
+    auto start = forge.get_lfm_start_hz();
+    if (!start) {
+        std::printf("error: %s\n", forge.dds_lfm_gpio_error().c_str());
+        return;
+    }
+    auto stop = forge.get_lfm_stop_hz();
+    auto incr = forge.get_lfm_incr();
+    auto continious = forge.lfm_continious();
+    if (!stop || !incr) {
+        std::printf("error: %s\n", forge.dds_lfm_gpio_error().c_str());
+        return;
+    }
+    std::printf("lfm-start: %.3f Hz\n", *start);
+    std::printf("lfm-stop: %.3f Hz\n", *stop);
+    std::printf("lfm-incr: %u FTW/clk\n", *incr);
+    auto sweep = forge.get_lfm_sweep_time_s();
+    if (sweep) {
+        std::printf("lfm-sweep-time: %.3f us (%.3f Hz/us)\n", *sweep * 1e6,
+                    (*stop - *start) / (*sweep * 1e6));
+    } else {
+        std::printf("lfm-sweep-time: n/a (%s)\n", forge.dds_lfm_gpio_error().c_str());
+    }
+    if (continious) {
+        std::printf("lfm-mode: %s\n", *continious ? "continious" : "one-shot");
+    } else {
+        std::printf("lfm-mode: n/a (%s)\n", forge.dds_ctrl_gpio_error().c_str());
+    }
+}
+
+static void act_lfm_start_set(project::iq_forge &forge) {
+    auto hz = read_double("Enter LFM start frequency in Hz: ");
+    if (!hz) {
+        std::printf("invalid or cancelled\n");
+        return;
+    }
+    if (forge.set_lfm_start_hz(*hz)) {
+        auto actual = forge.get_lfm_start_hz();
+        std::printf("lfm-start: %.3f Hz (requested %.3f Hz, rounded to nearest FTW step)\n",
+                    actual ? *actual : *hz, *hz);
+    } else {
+        std::printf("error: %s\n", forge.dds_lfm_gpio_error().c_str());
+    }
+}
+
+static void act_lfm_stop_set(project::iq_forge &forge) {
+    auto hz = read_double("Enter LFM stop frequency in Hz: ");
+    if (!hz) {
+        std::printf("invalid or cancelled\n");
+        return;
+    }
+    if (forge.set_lfm_stop_hz(*hz)) {
+        auto actual = forge.get_lfm_stop_hz();
+        std::printf("lfm-stop: %.3f Hz (requested %.3f Hz, rounded to nearest FTW step)\n",
+                    actual ? *actual : *hz, *hz);
+    } else {
+        std::printf("error: %s\n", forge.dds_lfm_gpio_error().c_str());
+    }
+}
+
+static void act_lfm_sweep_set(project::iq_forge &forge) {
+    auto us = read_double("Enter LFM sweep time (start -> stop) in microseconds: ");
+    if (!us) {
+        std::printf("invalid or cancelled\n");
+        return;
+    }
+    if (forge.set_lfm_sweep_time_s(*us * 1e-6)) {
+        auto actual = forge.get_lfm_sweep_time_s();
+        auto incr = forge.get_lfm_incr();
+        if (actual && incr) {
+            std::printf("lfm-sweep-time: %.3f us (requested %.3f us, increment %u FTW/clk)\n",
+                        *actual * 1e6, *us, *incr);
+        } else {
+            std::printf("lfm-sweep-time: set (requested %.3f us)\n", *us);
+        }
+    } else {
+        std::printf("error: %s\n", forge.dds_lfm_gpio_error().c_str());
+    }
+}
+
+static void act_lfm_incr_set(project::iq_forge &forge) {
+    auto incr = read_choice("Enter LFM increment (FTW per PL clock, 1-16777215): ", 1, 16777215);
+    if (!incr) {
+        std::printf("invalid or cancelled\n");
+        return;
+    }
+    if (forge.set_lfm_incr(static_cast<std::uint32_t>(*incr))) {
+        std::printf("lfm-incr: %ld FTW/clk\n", *incr);
+    } else {
+        std::printf("error: %s\n", forge.dds_lfm_gpio_error().c_str());
+    }
+}
+
+static void act_lfm_continious_set(project::iq_forge &forge) {
+    auto continious = select_lfm_continious();
+    if (!continious) {
+        return;
+    }
+    if (forge.set_lfm_continious(*continious)) {
+        std::printf("lfm-mode: %s\n", *continious ? "continious" : "one-shot");
+    } else {
+        std::printf("error: %s\n", forge.dds_ctrl_gpio_error().c_str());
+    }
+}
+
+static void act_lfm_restart(project::iq_forge &forge) {
+    if (forge.restart_lfm()) {
+        std::printf("lfm: restarted from start\n");
+    } else {
+        std::printf("error: %s\n", forge.dds_ctrl_gpio_error().c_str());
+    }
+}
+
+struct menu_item {
+    const char *label;
+    void (*action)(project::iq_forge &forge);
+};
+
+struct menu_section {
+    const char *title;
+    const menu_item *items;
+    std::size_t count;
+};
+
+static const menu_item k_tx_items[] = {
+    {"TX LO frequency - read", act_tx_lo_read},
+    {"TX LO frequency - set", act_tx_lo_set},
+    {"TX attenuation - read", act_tx_atten_read},
+    {"TX attenuation - set", act_tx_atten_set},
+    {"TX enable/disable", act_tx_enable},
+    {"TX state - read (ENSM)", act_tx_state_read},
+    {"TX quadrature/LO-leakage - recalibrate", act_tx_quad_cal},
+};
+
+static const menu_item k_rx_items[] = {
+    {"RX AGC mode - set", act_rx_agc_set},
+};
+
+static const menu_item k_dds_items[] = {
+    {"DDS enable/disable", act_dds_enable},
+    {"DDS state - read", act_dds_state_read},
+    {"DDS mode - select (sine / LFM)", act_dds_mode_set},
+    {"DDS mode - read", act_dds_mode_read},
+    {"DDS frequency - read (phase increment / FTW)", act_dds_freq_read},
+    {"DDS frequency - set (phase increment / FTW)", act_dds_freq_set},
+    {"DDS reset", act_dds_reset},
+};
+
+static const menu_item k_lfm_items[] = {
+    {"LFM config - read (start/stop/increment/sweep time/mode)", act_lfm_read},
+    {"LFM start frequency - set (Hz)", act_lfm_start_set},
+    {"LFM stop frequency - set (Hz)", act_lfm_stop_set},
+    {"LFM sweep time - set (us, picks the increment for current start/stop)", act_lfm_sweep_set},
+    {"LFM increment - set (raw FTW per PL clock)", act_lfm_incr_set},
+    {"LFM one-shot / continious - select", act_lfm_continious_set},
+    {"LFM restart sweep from start", act_lfm_restart},
+};
+
+static const menu_item k_lvds_items[] = {
+    {"TX clock/data delay - read (FB_CLK_DELAY / TX_DATA_DELAY)", act_tx_delay_read},
+    {"TX clock/data delay - set (FB_CLK_DELAY / TX_DATA_DELAY)", act_tx_delay_set},
+    {"TX clock/data delay - interactive tune (+/-, live)", act_tx_delay_tune},
+    {"LVDS invert - read (ctrl1/ctrl2)", act_lvds_invert_read},
+    {"LVDS invert - set (ctrl1/ctrl2, raw byte 0-255)", act_lvds_invert_set},
+    {"LVDS invert - interactive tune (bit toggle, live)", act_lvds_invert_tune},
+};
+
+static const menu_item k_bist_items[] = {
+    {"BIST tone - enable (TX1, bypasses LVDS/DDS)", act_bist_tone},
+    {"BIST PRBS - enable (TX1, bypasses LVDS/DDS)", act_bist_prbs},
+    {"BIST - disable (back to normal digital data)", act_bist_disable},
+    {"TX->RX digital loopback - enable (verify TX_D/TX_FRAME\n"
+     "    data actually reaches the chip, via ad9361_rx_lvds_wrapper)",
+     act_loopback_enable},
+    {"TX->RX digital loopback - disable", act_loopback_disable},
+};
+
+#define MENU_SECTION(title, items) {title, items, sizeof(items) / sizeof(items[0])}
+
+static const menu_section k_sections[] = {
+    MENU_SECTION("TX", k_tx_items),
+    MENU_SECTION("RX", k_rx_items),
+    MENU_SECTION("DDS", k_dds_items),
+    MENU_SECTION("LFM", k_lfm_items),
+    MENU_SECTION("LVDS interface (delay / invert)", k_lvds_items),
+    MENU_SECTION("AD9361 BIST / loopback", k_bist_items),
+};
+
+#undef MENU_SECTION
+
+// Returns false on EOF on stdin (exit the whole console), true on "back".
+static bool run_submenu(project::iq_forge &forge, const menu_section &section) {
+    for (;;) {
+        std::printf("\n==== iq_forge / %s ====\n", section.title);
+        for (std::size_t i = 0; i < section.count; ++i) {
+            std::printf("%2zu) %s\n", i + 1, section.items[i].label);
+        }
+        std::printf(" 0) back\n");
+
+        auto choice = read_choice("> ", 0, static_cast<long>(section.count));
+        if (!choice) {
+            return false;
+        }
+        if (*choice == 0) {
+            return true;
+        }
+        section.items[*choice - 1].action(forge);
+    }
 }
 
 static void run_menu(project::iq_forge &forge) {
+    constexpr std::size_t section_count = sizeof(k_sections) / sizeof(k_sections[0]);
     for (;;) {
-        print_menu();
-        auto choice = read_choice("> ", 0, 33);
+        std::printf("\n==== iq_forge console ====\n");
+        for (std::size_t i = 0; i < section_count; ++i) {
+            std::printf("%2zu) %s\n", i + 1, k_sections[i].title);
+        }
+        std::printf(" 0) exit\n");
+
+        auto choice = read_choice("> ", 0, static_cast<long>(section_count));
         if (!choice || *choice == 0) {
             return;
         }
-
-        switch (*choice) {
-            case 1: {
-                std::uint64_t hz = 0;
-                if (forge.get_ad9361_tx_lo_frequency(hz)) {
-                    std::printf("tx-lo: %llu Hz\n", static_cast<unsigned long long>(hz));
-                } else {
-                    std::printf("error: get tx frequency failed (%d)\n", forge.ad9361_transceiver_error_code());
-                }
-                break;
-            }
-            case 2: {
-                auto hz = read_u64("Enter TX LO frequency in Hz: ");
-                if (!hz) {
-                    std::printf("invalid or cancelled\n");
-                    break;
-                }
-                if (forge.set_ad9361_tx_lo_frequency(*hz)) {
-                    std::printf("tx-lo: %llu Hz\n", static_cast<unsigned long long>(*hz));
-                } else {
-                    std::printf("error: set tx frequency failed (%d)\n", forge.ad9361_transceiver_error_code());
-                }
-                break;
-            }
-            case 3: {
-                std::uint32_t mdb = 0;
-                if (forge.get_ad9361_tx_attenuation(mdb)) {
-                    std::printf("tx-atten: %.3f dB\n", mdb / 1000.0);
-                } else {
-                    std::printf("error: get tx attenuation failed (%d)\n", forge.ad9361_transceiver_error_code());
-                }
-                break;
-            }
-            case 4: {
-                auto db = read_double("Enter TX attenuation in dB: ");
-                if (!db || *db < 0.0) {
-                    std::printf("invalid or cancelled\n");
-                    break;
-                }
-                std::uint32_t mdb = static_cast<std::uint32_t>(*db * 1000.0 + 0.5);
-                if (forge.set_ad9361_tx_attenuation(mdb)) {
-                    std::printf("tx-atten: %.3f dB\n", mdb / 1000.0);
-                } else {
-                    std::printf("error: set tx attenuation failed (%d)\n", forge.ad9361_transceiver_error_code());
-                }
-                break;
-            }
-            case 5: {
-                auto mode = select_agc_mode();
-                if (!mode) {
-                    break;
-                }
-                if (!forge.set_ad9361_rx_gain_control_mode(*mode)) {
-                    std::printf("error: set agc mode failed (%d)\n", forge.ad9361_transceiver_error_code());
-                }
-                break;
-            }
-            case 6: {
-                auto on = select_on_off();
-                if (!on) {
-                    break;
-                }
-                bool ok = *on ? forge.enable_ad9361_tx() : forge.disable_ad9361_tx();
-                if (ok) {
-                    std::printf("tx: %s\n", *on ? "enabled" : "disabled");
-                } else {
-                    std::printf("error: %s tx failed (%d)\n", *on ? "enable" : "disable",
-                                forge.ad9361_transceiver_error_code());
-                }
-                break;
-            }
-            case 7: {
-                drivers::ensm_state state;
-                if (forge.get_ad9361_ensm_state(state)) {
-                    std::printf("tx: %s\n", ensm_state_name(state));
-                } else {
-                    std::printf("error: get ensm state failed (%d)\n", forge.ad9361_transceiver_error_code());
-                }
-                break;
-            }
-            case 8: {
-                auto on = select_on_off();
-                if (!on) {
-                    break;
-                }
-                if (forge.set_dds_enabled(*on)) {
-                    std::printf("dds: %s\n", *on ? "enabled" : "disabled");
-                } else {
-                    std::printf("error: %s\n", forge.dds_ctrl_gpio_error().c_str());
-                }
-                break;
-            }
-            case 9: {
-                auto enabled = forge.dds_enabled();
-                if (enabled) {
-                    std::printf("dds: %s\n", *enabled ? "enabled" : "disabled");
-                } else {
-                    std::printf("error: %s\n", forge.dds_ctrl_gpio_error().c_str());
-                }
-                break;
-            }
-            case 10: {
-                auto hz = forge.get_dds_frequency_hz();
-                if (hz) {
-                    std::printf("dds-freq: %.3f Hz\n", *hz);
-                } else {
-                    std::printf("error: %s\n", forge.dds_ftw_gpio_error().c_str());
-                }
-                break;
-            }
-            case 11: {
-                auto hz = read_double("Enter DDS frequency in Hz: ");
-                if (!hz || *hz < 0.0) {
-                    std::printf("invalid or cancelled\n");
-                    break;
-                }
-                if (forge.set_dds_frequency_hz(*hz)) {
-                    auto actual = forge.get_dds_frequency_hz();
-                    if (actual) {
-                        std::printf("dds-freq: %.3f Hz (requested %.3f Hz, rounded to nearest FTW step)\n", *actual,
-                                    *hz);
-                    } else {
-                        std::printf("dds-freq: set (requested %.3f Hz)\n", *hz);
-                    }
-                } else {
-                    std::printf("error: %s\n", forge.dds_ftw_gpio_error().c_str());
-                }
-                break;
-            }
-            case 12: {
-                if (forge.reset_dds()) {
-                    std::printf("dds: reset\n");
-                } else {
-                    std::printf("error: %s\n", forge.dds_ctrl_gpio_error().c_str());
-                }
-                break;
-            }
-            case 13: {
-                std::uint8_t fb_clk_delay = 0, tx_data_delay = 0;
-                if (forge.get_ad9361_tx_clock_data_delay(fb_clk_delay, tx_data_delay)) {
-                    std::printf("tx-clock-data-delay: fb_clk_delay=%u tx_data_delay=%u\n", fb_clk_delay,
-                                tx_data_delay);
-                } else {
-                    std::printf("error: get tx clock/data delay failed (%d)\n", forge.ad9361_transceiver_error_code());
-                }
-                break;
-            }
-            case 14: {
-                auto fb_clk_delay = read_choice("Enter FB_CLK_DELAY (0-15): ", 0, 15);
-                if (!fb_clk_delay) {
-                    std::printf("invalid or cancelled\n");
-                    break;
-                }
-                auto tx_data_delay = read_choice("Enter TX_DATA_DELAY (0-15): ", 0, 15);
-                if (!tx_data_delay) {
-                    std::printf("invalid or cancelled\n");
-                    break;
-                }
-                if (forge.set_ad9361_tx_clock_data_delay(static_cast<std::uint8_t>(*fb_clk_delay),
-                                                          static_cast<std::uint8_t>(*tx_data_delay))) {
-                    std::printf("tx-clock-data-delay: fb_clk_delay=%ld tx_data_delay=%ld\n", *fb_clk_delay,
-                                *tx_data_delay);
-                } else {
-                    std::printf("error: set tx clock/data delay failed (%d)\n", forge.ad9361_transceiver_error_code());
-                }
-                break;
-            }
-            case 15: {
-                run_tx_clock_data_delay_tuner(forge);
-                break;
-            }
-            case 16: {
-                if (forge.calibrate_ad9361_tx_quadrature()) {
-                    std::printf("tx-quad-cal: done\n");
-                } else {
-                    std::printf("error: tx quad cal failed (%d)\n", forge.ad9361_transceiver_error_code());
-                }
-                break;
-            }
-            case 17: {
-                std::uint8_t c1 = 0, c2 = 0;
-                if (forge.get_ad9361_lvds_invert(c1, c2)) {
-                    std::printf("lvds-invert: ctrl1=0x%02X ctrl2=0x%02X\n", c1, c2);
-                } else {
-                    std::printf("error: get lvds invert failed (%d)\n", forge.ad9361_transceiver_error_code());
-                }
-                break;
-            }
-            case 18: {
-                auto c1 = read_choice("Enter ctrl1 (0-255): ", 0, 255);
-                if (!c1) {
-                    std::printf("invalid or cancelled\n");
-                    break;
-                }
-                auto c2 = read_choice("Enter ctrl2 (0-255): ", 0, 255);
-                if (!c2) {
-                    std::printf("invalid or cancelled\n");
-                    break;
-                }
-                if (forge.set_ad9361_lvds_invert(static_cast<std::uint8_t>(*c1), static_cast<std::uint8_t>(*c2))) {
-                    std::printf("lvds-invert: ctrl1=0x%02lX ctrl2=0x%02lX\n", *c1, *c2);
-                } else {
-                    std::printf("error: set lvds invert failed (%d)\n", forge.ad9361_transceiver_error_code());
-                }
-                break;
-            }
-            case 19: {
-                run_lvds_invert_tuner(forge);
-                break;
-            }
-            case 20: {
-                auto hz = read_u64("Enter BIST tone frequency in Hz (0 for DC): ");
-                if (!hz) {
-                    std::printf("invalid or cancelled\n");
-                    break;
-                }
-                if (forge.set_ad9361_bist_tone(drivers::bist_mode::inject_tx, static_cast<std::uint32_t>(*hz), 0,
-                                                0x0)) {
-                    std::printf("bist-tone: enabled at %llu Hz on TX1 (item 22 to disable)\n",
-                                static_cast<unsigned long long>(*hz));
-                } else {
-                    std::printf("error: bist tone failed (%d)\n", forge.ad9361_transceiver_error_code());
-                }
-                break;
-            }
-            case 21: {
-                if (forge.set_ad9361_bist_prbs(drivers::bist_mode::inject_tx)) {
-                    std::printf("bist-prbs: enabled on TX1 (item 22 to disable)\n");
-                } else {
-                    std::printf("error: bist prbs failed (%d)\n", forge.ad9361_transceiver_error_code());
-                }
-                break;
-            }
-            case 22: {
-                if (forge.set_ad9361_bist_prbs(drivers::bist_mode::disable)) {
-                    std::printf("bist: disabled\n");
-                } else {
-                    std::printf("error: bist disable failed (%d)\n", forge.ad9361_transceiver_error_code());
-                }
-                break;
-            }
-            case 23: {
-                if (forge.set_ad9361_bist_loopback(1)) {
-                    std::printf("loopback: enabled (TX digital data now mirrored to RX digital port)\n");
-                } else {
-                    std::printf("error: loopback enable failed (%d)\n", forge.ad9361_transceiver_error_code());
-                }
-                break;
-            }
-            case 24: {
-                if (forge.set_ad9361_bist_loopback(0)) {
-                    std::printf("loopback: disabled\n");
-                } else {
-                    std::printf("error: loopback disable failed (%d)\n", forge.ad9361_transceiver_error_code());
-                }
-                break;
-            }
-            case 25: {
-                auto mode = select_dds_mode();
-                if (!mode) {
-                    break;
-                }
-                if (forge.set_dds_mode(*mode)) {
-                    std::printf("dds-mode: %s\n", *mode == drivers::dds_mode::lfm ? "lfm" : "sine");
-                } else {
-                    std::printf("error: %s\n", forge.dds_ctrl_gpio_error().c_str());
-                }
-                break;
-            }
-            case 26: {
-                auto mode = forge.get_dds_mode();
-                if (mode) {
-                    std::printf("dds-mode: %s\n", *mode == drivers::dds_mode::lfm ? "lfm" : "sine");
-                } else {
-                    std::printf("error: %s\n", forge.dds_ctrl_gpio_error().c_str());
-                }
-                break;
-            }
-            case 27: {
-                auto start = forge.get_lfm_start_hz();
-                if (!start) {
-                    std::printf("error: %s\n", forge.dds_lfm_gpio_error().c_str());
-                    break;
-                }
-                auto stop = forge.get_lfm_stop_hz();
-                auto incr = forge.get_lfm_incr();
-                auto continious = forge.lfm_continious();
-                if (!stop || !incr) {
-                    std::printf("error: %s\n", forge.dds_lfm_gpio_error().c_str());
-                    break;
-                }
-                std::printf("lfm-start: %.3f Hz\n", *start);
-                std::printf("lfm-stop: %.3f Hz\n", *stop);
-                std::printf("lfm-incr: %u FTW/clk\n", *incr);
-                auto sweep = forge.get_lfm_sweep_time_s();
-                if (sweep) {
-                    std::printf("lfm-sweep-time: %.3f us (%.3f Hz/us)\n", *sweep * 1e6,
-                                (*stop - *start) / (*sweep * 1e6));
-                } else {
-                    std::printf("lfm-sweep-time: n/a (%s)\n", forge.dds_lfm_gpio_error().c_str());
-                }
-                if (continious) {
-                    std::printf("lfm-mode: %s\n", *continious ? "continious" : "one-shot");
-                } else {
-                    std::printf("lfm-mode: n/a (%s)\n", forge.dds_ctrl_gpio_error().c_str());
-                }
-                break;
-            }
-            case 28: {
-                auto hz = read_double("Enter LFM start frequency in Hz: ");
-                if (!hz) {
-                    std::printf("invalid or cancelled\n");
-                    break;
-                }
-                if (forge.set_lfm_start_hz(*hz)) {
-                    auto actual = forge.get_lfm_start_hz();
-                    std::printf("lfm-start: %.3f Hz (requested %.3f Hz, rounded to nearest FTW step)\n",
-                                actual ? *actual : *hz, *hz);
-                } else {
-                    std::printf("error: %s\n", forge.dds_lfm_gpio_error().c_str());
-                }
-                break;
-            }
-            case 29: {
-                auto hz = read_double("Enter LFM stop frequency in Hz: ");
-                if (!hz) {
-                    std::printf("invalid or cancelled\n");
-                    break;
-                }
-                if (forge.set_lfm_stop_hz(*hz)) {
-                    auto actual = forge.get_lfm_stop_hz();
-                    std::printf("lfm-stop: %.3f Hz (requested %.3f Hz, rounded to nearest FTW step)\n",
-                                actual ? *actual : *hz, *hz);
-                } else {
-                    std::printf("error: %s\n", forge.dds_lfm_gpio_error().c_str());
-                }
-                break;
-            }
-            case 30: {
-                auto us = read_double("Enter LFM sweep time (start -> stop) in microseconds: ");
-                if (!us) {
-                    std::printf("invalid or cancelled\n");
-                    break;
-                }
-                if (forge.set_lfm_sweep_time_s(*us * 1e-6)) {
-                    auto actual = forge.get_lfm_sweep_time_s();
-                    auto incr = forge.get_lfm_incr();
-                    if (actual && incr) {
-                        std::printf("lfm-sweep-time: %.3f us (requested %.3f us, increment %u FTW/clk)\n",
-                                    *actual * 1e6, *us, *incr);
-                    } else {
-                        std::printf("lfm-sweep-time: set (requested %.3f us)\n", *us);
-                    }
-                } else {
-                    std::printf("error: %s\n", forge.dds_lfm_gpio_error().c_str());
-                }
-                break;
-            }
-            case 31: {
-                auto incr = read_choice("Enter LFM increment (FTW per PL clock, 1-16777215): ", 1, 16777215);
-                if (!incr) {
-                    std::printf("invalid or cancelled\n");
-                    break;
-                }
-                if (forge.set_lfm_incr(static_cast<std::uint32_t>(*incr))) {
-                    std::printf("lfm-incr: %ld FTW/clk\n", *incr);
-                } else {
-                    std::printf("error: %s\n", forge.dds_lfm_gpio_error().c_str());
-                }
-                break;
-            }
-            case 32: {
-                auto continious = select_lfm_continious();
-                if (!continious) {
-                    break;
-                }
-                if (forge.set_lfm_continious(*continious)) {
-                    std::printf("lfm-mode: %s\n", *continious ? "continious" : "one-shot");
-                } else {
-                    std::printf("error: %s\n", forge.dds_ctrl_gpio_error().c_str());
-                }
-                break;
-            }
-            case 33: {
-                if (forge.restart_lfm()) {
-                    std::printf("lfm: restarted from start\n");
-                } else {
-                    std::printf("error: %s\n", forge.dds_ctrl_gpio_error().c_str());
-                }
-                break;
-            }
-            default:
-                break;
+        if (!run_submenu(forge, k_sections[*choice - 1])) {
+            return;
         }
     }
 }
