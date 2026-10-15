@@ -1,0 +1,44 @@
+# PR review by a local Ollama model on the self-hosted runner (labels: self-hosted, ollama).
+# pull_request_target runs this file from the base branch and never checks out
+# PR code: the script only reads the diff through the API, so a PR cannot run
+# anything on the runner machine. Only owner/collaborator PRs are reviewed.
+name: LLM review
+
+on:
+  pull_request_target:
+    types: [opened, synchronize, reopened, ready_for_review]
+  workflow_dispatch:
+    inputs:
+      pr:
+        description: PR number
+        required: true
+
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write
+
+concurrency:
+  group: llm-review-${{ github.event.pull_request.number || inputs.pr }}
+  cancel-in-progress: true
+
+jobs:
+  review:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (!github.event.pull_request.draft &&
+       contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.pull_request.author_association))
+    runs-on: [self-hosted, ollama]
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: .github/scripts
+          persist-credentials: false
+
+      - name: Review
+        run: python3 -I .github/scripts/llm_review.py
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number || inputs.pr }}
+          OLLAMA_MODEL: qwen3-coder
